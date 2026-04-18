@@ -1,76 +1,130 @@
 # RoSync
 
-RoSync is an open-source, bidirectional sync stack for Roblox Studio and editor integrations.
+> Bidirectional live sync between Roblox Studio and Visual Studio Code.
 
-This repository is being rebuilt around the architecture in `ROSYNC_AGENT_PROMPT.md`. The current target shape is:
+RoSync keeps your Roblox Studio DataModel and your local file system in sync — in real time, in both directions. Edit a script in VSCode and see it update in Studio instantly. Add a Part in Studio and see the `.instance.json` appear on disk. Everything syncs — not just scripts, but Parts, Models, GUIs, RemoteEvents, Configurations, and every other Roblox instance class.
 
-- `daemon/`: the RoSync CLI daemon and sync server
-- `plugin/`: the Roblox Studio plugin
-- `extension/`: the editor extension foundation (current first-party target: VS Code)
-- `docs/`: Docusaurus-compatible documentation
-- `install/`: cross-platform installer scripts
+Built on TypeScript, runs entirely on localhost. No cloud, no relay server.
 
-## Current Status
+---
 
-The fresh implementation starts with a new TypeScript daemon foundation:
+## Features
 
-- `rosync init`
-- `rosync watch`
-- `rosync status`
-- `rosync doctor`
-- `rosync schema update`
-- `rosync push`
-- `rosync pull`
-- `rosync place list`
-- `rosync place add`
-- `rosync place switch`
-- `rosync git init`
-- `rosync git commit`
-- `rosync git diff`
-- `rosync update`
-- `rosync uninstall`
+- **Two-way live sync** — changes in Studio appear on disk; changes on disk appear in Studio
+- **Everything syncs** — Scripts, Parts, Models, GUIs, RemoteEvents, Sounds, Animations, and any instance class Roblox supports
+- **ReflectionService-driven** — property discovery uses Roblox's own API, so new instance types are supported automatically without any RoSync update
+- **Localhost only** — all traffic stays on `127.0.0.1:34872`, nothing leaves your machine
+- **VSCode Explorer** — browse your full Roblox DataModel tree inside VSCode with Roblox-style class icons
+- **Multi-place support** — manage multiple Roblox places in one project
+- **Git integration** — auto-commit sync events, track changes over time
+- **Cross-platform** — Windows, macOS, and Linux
 
-The daemon now owns the new config, schema cache, ignore parsing, filesystem-backed project tree, HTTP/WebSocket runtime, and project bootstrap flow.
+---
 
-## Implemented Foundation
+## Installation
 
-- Filesystem-backed project tree under a configured project `src/<Service>/<Instance>/`
-- `.instance.json` discovery and script file detection
-- HTTP endpoints for health, status, schema, tree, and instance mutations
-- WebSocket handshake plus basic instance add/change/remove/rename handling
-- editor extension views for Explorer, Properties, and Status
-- Studio plugin modules for daemon health checks, WebSocket connection, and change forwarding
+### Prerequisites
+- [Git](https://git-scm.com)
+- [Node.js 18+](https://nodejs.org)
+- [Visual Studio Code](https://code.visualstudio.com)
+- Roblox Studio
 
-## Why TypeScript
-
-The prompt recommends Rust or Node.js. This environment has Node.js available but does not have Rust tooling installed, so the rebuild starts with a TypeScript implementation that is cross-platform and easy to iterate on locally.
-
-That decision is documented in [ARCHITECTURE.md](ARCHITECTURE.md).
-
-## Workspace Layout
-
-```text
-.
-├── daemon/
-├── docs/
-├── examples/
-├── extension/
-├── install/
-├── plugin/
-├── ARCHITECTURE.md
-├── CONTRIBUTING.md
-├── LICENSE
-├── README.md
-└── TESTING.md
+### Windows
+```powershell
+git clone https://github.com/SeventhBuilder/RoSync.git
+cd RoSync
+powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1
 ```
 
-## Legacy Prototype
+### macOS
+```bash
+git clone https://github.com/SeventhBuilder/RoSync.git
+cd RoSync
+bash install/macos/install.sh
+```
 
-Older prototype folders remain in the workspace during the rebuild so we do not destroy existing work unexpectedly. They are not the target architecture going forward.
+### Linux
+```bash
+git clone https://github.com/SeventhBuilder/RoSync.git
+cd RoSync
+bash install/linux/install.sh
+```
 
-## Dev Project
+The installer builds RoSync from source, adds `rosync` to your PATH, and installs the VSCode extension automatically.
 
-The repository root is now tool source only. The dogfood RoSync project used for local extension and daemon development lives under `examples/dev-project/`.
+---
+
+## Quick Start
+
+```bash
+# Create a new RoSync project in your game folder
+mkdir my-game && cd my-game
+rosync init
+
+# Start the sync daemon
+rosync watch
+```
+
+Then in Roblox Studio:
+1. Open the **RoSync plugin** (Plugins → RoSync)
+2. Click **Connect**
+3. The status indicator turns 🟢 — you're live
+
+Changes in Studio now sync to `src/` on disk. Changes to files in VSCode sync back to Studio.
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---|---|
+| `rosync init` | Scaffold a new RoSync project |
+| `rosync watch` | Start the live sync daemon |
+| `rosync push` | Force-push local files to Studio |
+| `rosync pull` | Force-pull Studio state to disk |
+| `rosync status` | Show sync state, connections, drift |
+| `rosync doctor` | Diagnose connection and config issues |
+| `rosync schema update` | Fetch the latest Roblox API schema |
+| `rosync place list/add/switch` | Manage multiple Roblox places |
+| `rosync git init/commit/diff` | Git integration commands |
+| `rosync update` | Update RoSync to the latest version |
+| `rosync uninstall` | Remove RoSync from your system |
+
+---
+
+## Project Structure
+
+Once synced, your game lives on disk like this:
+
+```
+src/
+  Workspace/
+    Baseplate/
+      .instance.json        ← instance class + properties
+  ServerScriptService/
+    GameManager/
+      .instance.json
+      init.server.luau      ← script source
+  ReplicatedStorage/
+    MyModule/
+      init.luau
+```
+
+---
+
+## Repository Layout
+
+```
+.
+├── daemon/       TypeScript CLI daemon and sync server
+├── plugin/       Roblox Studio plugin (Luau)
+├── extension/    VSCode extension
+├── install/      Cross-platform installer scripts
+├── docs/         Documentation (Docusaurus)
+└── examples/     Dev project for local testing
+```
+
+---
 
 ## Development
 
@@ -80,35 +134,19 @@ npm run build
 npm run test
 ```
 
-## Installation
-
-For a quick PowerShell-based setup on Windows that installs the Studio plugin and creates a local CLI shim, run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1
-```
-
-For macOS and Linux source installs from `bash` or `zsh`:
-
-```bash
-bash install/macos/install.sh
-bash install/linux/install.sh
-zsh install/macos/install.sh
-zsh install/linux/install.sh
-```
-
-Each installer writes install metadata to the platform-local RoSync meta directory so `rosync update` and `rosync uninstall` can find the linked source checkout later. The current source installers keep the checkout in place on uninstall instead of deleting the repository you installed from, and the Unix installers can add the CLI shim to `bash` and `zsh` shell profiles.
-
-Run the daemon against the bundled dev project:
+To run the daemon against the example project:
 
 ```bash
 cd examples/dev-project
 node ../../node_modules/tsx/dist/cli.mjs ../../daemon/src/main.ts watch
 ```
 
-From another shell, inspect the daemon:
+---
 
-```bash
-cd examples/dev-project
-node ../../node_modules/tsx/dist/cli.mjs ../../daemon/src/main.ts status
-```
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
