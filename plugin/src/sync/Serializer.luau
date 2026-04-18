@@ -77,11 +77,9 @@ local function getPropertyNamesForClass(className)
 	for _, prop in ipairs(props) do
 		local name = prop.Name
 		if type(name) == "string" and not PROPERTY_DENYLIST[name] then
-			-- Only include properties we can actually write back
-			local permits = prop.Permits
-			local canWrite = permits == nil
-				or permits.Write ~= nil
-				or permits.WriteParallel ~= nil
+			local canWrite = prop.Permits == nil
+				or prop.Permits.Write ~= nil
+				or prop.Permits.WriteParallel ~= nil
 			if canWrite then
 				table.insert(names, name)
 			end
@@ -156,7 +154,7 @@ local function encodeValue(value)
 	end
 
 	if valueType == "EnumItem" then
-		return { type = "EnumItem", value = tostring(value) }
+		return { type = "EnumItem", value = safeTostring(value) }
 	end
 
 	if valueType == "Vector2" then
