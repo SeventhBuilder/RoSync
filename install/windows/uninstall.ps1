@@ -81,7 +81,8 @@ function Get-SourceInfo {
 
   if (Test-Path -LiteralPath $installMetadataPath) {
     try {
-      $metadata = Get-Content -LiteralPath $installMetadataPath -Raw | ConvertFrom-Json
+      $metadataJson = (Get-Content -LiteralPath $installMetadataPath -Raw) -replace "^\uFEFF", ""
+      $metadata = $metadataJson | ConvertFrom-Json
       if ($metadata.sourceDir) {
         $sourceDir = [string]$metadata.sourceDir
       }

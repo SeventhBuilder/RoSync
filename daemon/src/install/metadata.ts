@@ -32,6 +32,10 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function stripUtf8Bom(rawText: string): string {
+  return rawText.replace(/^\uFEFF/, "");
+}
+
 function localAppDataDir(): string {
   return process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
 }
@@ -162,7 +166,7 @@ function normalizeMetadata(raw: UnknownRecord, metaDir: string): InstallMetadata
 export async function readInstallMetadata(metaDir = getDefaultMetaDir()): Promise<InstallMetadata | null> {
   try {
     const rawText = await fs.readFile(getInstallMetadataPath(metaDir), "utf8");
-    const parsed = JSON.parse(rawText) as unknown;
+    const parsed = JSON.parse(stripUtf8Bom(rawText)) as unknown;
     if (!isRecord(parsed)) {
       return null;
     }

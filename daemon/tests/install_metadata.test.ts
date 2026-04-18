@@ -50,3 +50,22 @@ test("readInstallMetadata falls back to install-path when install.json is missin
   assert.equal(loaded?.metaDir, metaDir);
   assert.equal(loaded?.sourceMode, "linked");
 });
+
+test("readInstallMetadata strips a UTF-8 BOM from install.json", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "rosync-install-meta-"));
+  const metaDir = path.join(tempDir, "meta");
+  const sourceDir = path.join(tempDir, "source");
+  const metadata = buildInstallMetadata(sourceDir, {
+    platform: "win32",
+    metaDir,
+  });
+
+  await fs.mkdir(metaDir, { recursive: true });
+  await fs.writeFile(getInstallMetadataPath(metaDir), `\uFEFF${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+
+  const loaded = await readInstallMetadata(metaDir);
+  assert.ok(loaded);
+  assert.equal(loaded?.sourceDir, sourceDir);
+  assert.equal(loaded?.metaDir, metaDir);
+  assert.equal(loaded?.platform, "win32");
+});

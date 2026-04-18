@@ -25,6 +25,7 @@ $installPathFile = Join-Path $metaDir "install-path"
 $installMetadataPath = Join-Path $metaDir "install.json"
 $daemonEntry = Join-Path $repoRoot "daemon\dist\main.js"
 $extensionId = "rosync.rosync-extension"
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Write-Step {
   param([string]$Message)
@@ -125,7 +126,8 @@ function Write-InstallMetadata {
 
   if (Test-Path -LiteralPath $installMetadataPath) {
     try {
-      $existing = Get-Content -LiteralPath $installMetadataPath -Raw | ConvertFrom-Json
+      $existingJson = (Get-Content -LiteralPath $installMetadataPath -Raw) -replace "^\uFEFF", ""
+      $existing = $existingJson | ConvertFrom-Json
       if ($existing.installedAt) {
         $installedAt = [string]$existing.installedAt
       }
@@ -152,7 +154,8 @@ function Write-InstallMetadata {
 
   New-Item -ItemType Directory -Force -Path $metaDir | Out-Null
   Set-Content -LiteralPath $installPathFile -Value $repoRoot -Encoding ASCII
-  $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $installMetadataPath -Encoding UTF8
+  $metadataJson = $metadata | ConvertTo-Json -Depth 4
+  [System.IO.File]::WriteAllText($installMetadataPath, $metadataJson, $utf8NoBom)
 }
 
 function Install-EditorExtension {
