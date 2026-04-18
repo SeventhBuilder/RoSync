@@ -539,11 +539,13 @@ local function startWatch()
 		onChanged = function(instance)
 			pushInstance(instance)
 		end,
-		onRenamed = function(_, oldPath, newPath)
+		onRenamed = function(instance, oldPath, newPath)
+			local serialized = Serializer.serializeInstance(instance, true)
 			sendMessage({
 				type = "RENAME_INSTANCE",
 				oldPath = oldPath,
 				newPath = newPath,
+				data = serialized,
 			})
 		end,
 		onRemoving = function(_, previousPath)

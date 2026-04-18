@@ -6,6 +6,7 @@ local DEFAULT_DEBOUNCE_SECONDS = 0.15
 function Listener.attach(shouldSync, callbacks, options)
 	local connections = {}
 	local changedConnections = {}
+	local nameChangedConnections = {}
 	local lastKnownPaths = {}
 	local pendingThreads = {}
 
@@ -29,6 +30,11 @@ function Listener.attach(shouldSync, callbacks, options)
 			existing:Disconnect()
 			changedConnections[instance] = nil
 		end
+		local nameChanged = nameChangedConnections[instance]
+		if nameChanged then
+			nameChanged:Disconnect()
+			nameChangedConnections[instance] = nil
+		end
 	end
 
 	local function scheduleChanged(instance)
@@ -36,12 +42,13 @@ function Listener.attach(shouldSync, callbacks, options)
 
 		pendingThreads[instance] = task.delay(debounceSeconds, function()
 			pendingThreads[instance] = nil
+			local currentPath = PathUtil.getInstancePath(instance)
 			if not shouldSync(instance) then
+				lastKnownPaths[instance] = currentPath
 				return
 			end
 
 			local previousPath = lastKnownPaths[instance]
-			local currentPath = PathUtil.getInstancePath(instance)
 
 			if previousPath and currentPath ~= previousPath and callbacks.onRenamed then
 				callbacks.onRenamed(instance, previousPath, currentPath)
@@ -54,12 +61,18 @@ function Listener.attach(shouldSync, callbacks, options)
 	end
 
 	local function watchInstance(instance)
-		if changedConnections[instance] then
+		if changedConnections[instance] or nameChangedConnections[instance] then
 			return
 		end
 
 		lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
-		changedConnections[instance] = instance.Changed:Connect(function()
+		changedConnections[instance] = instance.Changed:Connect(function(propertyName)
+			if propertyName == "Name" then
+				return
+			end
+			scheduleChanged(instance)
+		end)
+		nameChangedConnections[instance] = instance:GetPropertyChangedSignal("Name"):Connect(function()
 			scheduleChanged(instance)
 		end)
 	end
@@ -99,6 +112,10 @@ function Listener.attach(shouldSync, callbacks, options)
 		for instance, connection in pairs(changedConnections) do
 			connection:Disconnect()
 			changedConnections[instance] = nil
+		end
+		for instance, connection in pairs(nameChangedConnections) do
+			connection:Disconnect()
+			nameChangedConnections[instance] = nil
 		end
 		for instance, pendingThread in pairs(pendingThreads) do
 			task.cancel(pendingThread)
