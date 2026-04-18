@@ -1,0 +1,133 @@
+{
+  "name": "rosync-vscode",
+  "displayName": "RoSync",
+  "description": "RoSync Explorer, Properties, Status, Git, and AI Agent views for VS Code.",
+  "version": "0.1.0",
+  "publisher": "rosync",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:rosync.explorer",
+    "onView:rosync.properties",
+    "onView:rosync.status",
+    "onView:rosync.git",
+    "onView:rosync.agent"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.19",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.8.3"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rosync-sidebar",
+          "title": "RoSync",
+          "icon": "assets/rosync-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "rosync-sidebar": [
+        {
+          "id": "rosync.explorer",
+          "name": "Explorer"
+        },
+        {
+          "id": "rosync.properties",
+          "name": "Properties"
+        },
+        {
+          "id": "rosync.status",
+          "name": "Sync Status"
+        },
+        {
+          "id": "rosync.git",
+          "name": "Git History"
+        },
+        {
+          "id": "rosync.agent",
+          "name": "AI Agent Log"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "rosync.refreshExplorer",
+        "title": "Refresh RoSync Explorer"
+      },
+      {
+        "command": "rosync.openSource",
+        "title": "Open Source"
+      },
+      {
+        "command": "rosync.copyPath",
+        "title": "Copy Roblox Path"
+      },
+      {
+        "command": "rosync.createInstance",
+        "title": "Create Instance"
+      },
+      {
+        "command": "rosync.renameNode",
+        "title": "Rename Instance"
+      },
+      {
+        "command": "rosync.deleteNode",
+        "title": "Delete Instance"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "rosync.refreshExplorer",
+          "when": "view == rosync.explorer",
+          "group": "navigation"
+        },
+        {
+          "command": "rosync.createInstance",
+          "when": "view == rosync.explorer",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "rosync.openSource",
+          "when": "view == rosync.explorer",
+          "group": "inline"
+        },
+        {
+          "command": "rosync.copyPath",
+          "when": "view == rosync.explorer",
+          "group": "inline@1"
+        },
+        {
+          "command": "rosync.createInstance",
+          "when": "view == rosync.explorer",
+          "group": "navigation"
+        },
+        {
+          "command": "rosync.renameNode",
+          "when": "view == rosync.explorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "rosync.deleteNode",
+          "when": "view == rosync.explorer",
+          "group": "navigation@2"
+        }
+      ]
+    }
+  }
+}

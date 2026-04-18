@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+
+.rosync/runtime.json
+.rosync/runtime.lock
+
+plugin/Plugin.rbxm
+extension/.vscode-test/

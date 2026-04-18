@@ -1,0 +1,12 @@
+# Ignore all Terrain children
+Workspace/Terrain/**
+
+# Ignore specific service
+Lighting/
+
+# Ignore all Sound instances globally
+**/*.Sound
+
+# Ignore specific classes globally
+[class:Sky]
+[class:Atmosphere]

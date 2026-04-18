@@ -1,0 +1,170 @@
+import * as vscode from "vscode";
+import { DaemonClient, type ProjectTreeNode } from "./daemon/DaemonClient.js";
+import { ExplorerProvider } from "./explorer/ExplorerProvider.js";
+import { PropertiesProvider } from "./properties/PropertiesProvider.js";
+import { StatusProvider } from "./status/StatusProvider.js";
+
+const CREATEABLE_CLASSES = [
+  "Folder",
+  "Model",
+  "Part",
+  "Script",
+  "LocalScript",
+  "ModuleScript",
+  "RemoteEvent",
+  "RemoteFunction",
+  "StringValue",
+  "BoolValue",
+  "NumberValue",
+];
+
+async function openSource(node: ProjectTreeNode): Promise<void> {
+  const targetPath = node.sourceFilePath ?? node.metadataPath;
+  await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(targetPath));
+}
+
+async function copyPath(node: ProjectTreeNode): Promise<void> {
+  await vscode.env.clipboard.writeText(node.path);
+  void vscode.window.showInformationMessage(`Copied Roblox path: ${node.path}`);
+}
+
+async function createInstance(daemonClient: DaemonClient, provider: ExplorerProvider, selectedNode?: ProjectTreeNode): Promise<void> {
+  const parentPath = selectedNode?.path;
+  if (!parentPath) {
+    void vscode.window.showInformationMessage("Select a parent instance or service in RoSync Explorer.");
+    return;
+  }
+
+  const pickedClass = await vscode.window.showQuickPick(CREATEABLE_CLASSES, {
+    title: "RoSync: Create Instance",
+    placeHolder: "Choose a Roblox class",
+  });
+  if (!pickedClass) {
+    return;
+  }
+
+  const name = await vscode.window.showInputBox({
+    title: "RoSync: Instance Name",
+    prompt: "Enter the new instance name",
+    value: pickedClass,
+    validateInput(value) {
+      return value.trim() ? undefined : "Instance name is required.";
+    },
+  });
+
+  if (!name) {
+    return;
+  }
+
+  await daemonClient.createNode(parentPath, name.trim(), pickedClass);
+  await provider.refresh();
+}
+
+async function renameInstance(daemonClient: DaemonClient, provider: ExplorerProvider, selectedNode?: ProjectTreeNode): Promise<void> {
+  if (!selectedNode) {
+    void vscode.window.showInformationMessage("Select an instance to rename.");
+    return;
+  }
+
+  const nextName = await vscode.window.showInputBox({
+    title: "RoSync: Rename Instance",
+    value: selectedNode.name,
+    validateInput(value) {
+      return value.trim() ? undefined : "Instance name is required.";
+    },
+  });
+
+  if (!nextName || nextName.trim() === selectedNode.name) {
+    return;
+  }
+
+  await daemonClient.renameNode(selectedNode.path, nextName.trim());
+  await provider.refresh();
+}
+
+async function deleteInstance(daemonClient: DaemonClient, provider: ExplorerProvider, selectedNode?: ProjectTreeNode): Promise<void> {
+  if (!selectedNode) {
+    void vscode.window.showInformationMessage("Select an instance to delete.");
+    return;
+  }
+
+  const confirmation = await vscode.window.showWarningMessage(
+    `Delete ${selectedNode.path}?`,
+    { modal: true },
+    "Delete",
+  );
+
+  if (confirmation !== "Delete") {
+    return;
+  }
+
+  await daemonClient.deleteNode(selectedNode.path);
+  await provider.refresh();
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+  const daemonClient = new DaemonClient();
+  const explorerProvider = new ExplorerProvider(daemonClient);
+  const propertiesProvider = new PropertiesProvider();
+  const statusProvider = new StatusProvider(daemonClient);
+  const explorerTreeView = vscode.window.createTreeView("rosync.explorer", {
+    treeDataProvider: explorerProvider,
+  });
+
+  context.subscriptions.push(
+    explorerTreeView,
+    vscode.window.registerTreeDataProvider("rosync.properties", propertiesProvider),
+    vscode.window.registerTreeDataProvider("rosync.status", statusProvider),
+    vscode.commands.registerCommand("rosync.refreshExplorer", async () => {
+      await explorerProvider.refresh();
+      await statusProvider.refresh();
+    }),
+    vscode.commands.registerCommand("rosync.openSource", openSource),
+    vscode.commands.registerCommand("rosync.copyPath", copyPath),
+    vscode.commands.registerCommand("rosync.createInstance", (node?: ProjectTreeNode) =>
+      createInstance(daemonClient, explorerProvider, node),
+    ),
+    vscode.commands.registerCommand("rosync.renameNode", (node?: ProjectTreeNode) =>
+      renameInstance(daemonClient, explorerProvider, node),
+    ),
+    vscode.commands.registerCommand("rosync.deleteNode", (node?: ProjectTreeNode) =>
+      deleteInstance(daemonClient, explorerProvider, node),
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.window.createTreeView("rosync.git", {
+      treeDataProvider: {
+        getTreeItem: (item: vscode.TreeItem) => item,
+        getChildren: () => [new vscode.TreeItem("Git integration foundation", vscode.TreeItemCollapsibleState.None)],
+      },
+    }),
+    vscode.window.createTreeView("rosync.agent", {
+      treeDataProvider: {
+        getTreeItem: (item: vscode.TreeItem) => item,
+        getChildren: () => [new vscode.TreeItem("AI agent foundation", vscode.TreeItemCollapsibleState.None)],
+      },
+    }),
+  );
+
+  explorerTreeView.onDidChangeSelection((event) => {
+    propertiesProvider.setSelectedNode(explorerProvider.selectedData(event.selection[0]));
+  });
+
+  const statusInterval = setInterval(() => {
+    void statusProvider.refresh();
+  }, 5000);
+  const explorerInterval = setInterval(() => {
+    void explorerProvider.refresh();
+  }, 5000);
+
+  context.subscriptions.push(
+    new vscode.Disposable(() => clearInterval(statusInterval)),
+    new vscode.Disposable(() => clearInterval(explorerInterval)),
+  );
+
+  void explorerProvider.refresh();
+  void statusProvider.refresh();
+}
+
+export function deactivate(): void {}

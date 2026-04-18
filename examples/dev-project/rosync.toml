@@ -1,0 +1,33 @@
+[project]
+name = "RoSync"
+version = "1.0.0"
+game_id = 0
+
+[sync]
+port = 34872
+host = "127.0.0.1"
+src = "src"
+auto_schema_update = true
+debounce_ms = 150
+
+[git]
+enabled = true
+auto_commit = false
+auto_commit_message = "chore: rosync auto-sync [{timestamp}]"
+branch = "main"
+
+[places]
+default = "MainPlace"
+
+[places.MainPlace]
+place_id = 0
+src = "src"
+
+[team]
+enabled = false
+token = ""
+conflict_strategy = "prompt"
+
+[ignore]
+services = ["CoreGui", "CorePackages", "RobloxPluginGuiService"]
+classes = ["Sky", "Atmosphere"]

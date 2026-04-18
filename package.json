@@ -1,0 +1,15 @@
+{
+  "name": "rosync",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "daemon",
+    "extension"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "dev:daemon": "npm run dev --workspace daemon"
+  }
+}

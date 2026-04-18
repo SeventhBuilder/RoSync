@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "RoSync Daemon: Watch",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
+        "${workspaceFolder}/daemon/src/main.ts",
+        "watch"
+      ],
+      "isBackground": true,
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}/examples/dev-project"
+      }
+    },
+    {
+      "label": "RoSync Daemon: Status",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
+        "${workspaceFolder}/daemon/src/main.ts",
+        "status"
+      ],
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}/examples/dev-project"
+      }
+    },
+    {
+      "label": "RoSync Plugin: Bundle",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "plugin/tools/bundle.mjs"
+      ],
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}

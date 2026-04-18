@@ -1,0 +1,44 @@
+{
+  "metadata": {
+    "source": "bundled",
+    "fetchedAt": "2026-04-18T00:00:00.000Z",
+    "version": "bundled-0.1.0"
+  },
+  "classes": {
+    "Folder": {
+      "name": "Folder",
+      "properties": []
+    },
+    "Model": {
+      "name": "Model",
+      "properties": []
+    },
+    "Part": {
+      "name": "Part",
+      "properties": [
+        "Anchored",
+        "CanCollide",
+        "Color",
+        "Material",
+        "Size"
+      ]
+    },
+    "Script": {
+      "name": "Script",
+      "properties": [
+        "Disabled",
+        "RunContext"
+      ]
+    },
+    "LocalScript": {
+      "name": "LocalScript",
+      "properties": [
+        "Disabled"
+      ]
+    },
+    "ModuleScript": {
+      "name": "ModuleScript",
+      "properties": []
+    }
+  }
+}
