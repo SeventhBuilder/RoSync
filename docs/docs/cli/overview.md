@@ -9,6 +9,12 @@ The daemon foundation currently includes:
 - `rosync schema update`
 - `rosync push`
 - `rosync pull`
+- `rosync place list`
+- `rosync place add`
+- `rosync place switch`
+- `rosync git init`
+- `rosync git commit`
+- `rosync git diff`
 
 While `watch` is running, the daemon also exposes:
 

@@ -1,6 +1,6 @@
 module.exports = {
   title: "RoSync",
-  tagline: "Two-way Roblox Studio and VS Code sync",
+  tagline: "Two-way Roblox Studio and editor sync",
   url: "https://rosync.dev",
   baseUrl: "/",
   onBrokenLinks: "warn",

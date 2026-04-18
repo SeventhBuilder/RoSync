@@ -7,7 +7,7 @@ interface HealthResponse {
   ok: boolean;
   connections?: {
     studio: number;
-    vscode: number;
+    editor: number;
     unknown: number;
   };
   summary?: {
@@ -69,7 +69,7 @@ export function registerStatusCommand(program: Command): void {
       console.log(`Ignored entries:    ${localSummary.ignoredEntries}`);
       console.log(`Daemon:             ${health ? "connected" : "disconnected"}`);
       console.log(`Studio clients:     ${connections.studio}`);
-      console.log(`VS Code clients:    ${connections.vscode}`);
+      console.log(`Editor clients:     ${connections.editor}`);
       console.log(`Other clients:      ${connections.unknown}`);
       console.log(`Schema version:     ${schemaVersion}`);
       console.log(`Schema fetched at:  ${formatTimestamp(schemaFetchedAt)}`);

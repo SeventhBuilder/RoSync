@@ -1,7 +1,7 @@
 {
-  "name": "rosync-vscode",
+  "name": "rosync-extension",
   "displayName": "RoSync",
-  "description": "RoSync Explorer, Properties, Status, Git, and AI Agent views for VS Code.",
+  "description": "RoSync editor integration foundation for VS Code.",
   "version": "0.1.0",
   "publisher": "rosync",
   "private": true,

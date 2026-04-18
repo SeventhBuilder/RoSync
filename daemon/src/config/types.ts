@@ -61,7 +61,7 @@ export interface ResolvedRoSyncConfig extends RoSyncConfig {
 
 export interface RuntimeConnections {
   studio: number;
-  vscode: number;
+  editor: number;
   unknown: number;
 }
 
@@ -191,7 +191,7 @@ export const EMPTY_RUNTIME_STATE: RuntimeState = {
   schemaFetchedAt: null,
   connections: {
     studio: 0,
-    vscode: 0,
+    editor: 0,
     unknown: 0,
   },
   summary: EMPTY_RUNTIME_SUMMARY,

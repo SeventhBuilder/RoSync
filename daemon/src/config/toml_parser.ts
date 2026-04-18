@@ -15,9 +15,14 @@ import {
 } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
+export type ConfigDocument = Record<string, unknown>;
 
 function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isConfigDocument(value: unknown): value is ConfigDocument {
+  return isRecord(value);
 }
 
 function readString(value: unknown, fallback: string): string {
@@ -93,6 +98,12 @@ export async function findProjectRoot(startDir = process.cwd()): Promise<string 
       currentDir = parentDir;
     }
   }
+}
+
+export interface LoadedConfigDocument {
+  projectRoot: string;
+  configPath: string;
+  document: ConfigDocument;
 }
 
 export interface ConfigOverrides {
@@ -178,11 +189,40 @@ function resolvePlaces(rawPlaces: unknown): PlacesSection {
   return result;
 }
 
-export async function loadConfig(startDir = process.cwd(), overrides?: ConfigOverrides): Promise<ResolvedRoSyncConfig> {
+export async function loadConfigDocument(startDir = process.cwd()): Promise<LoadedConfigDocument> {
   const projectRoot = (await findProjectRoot(startDir)) ?? path.resolve(startDir);
   const configPath = path.join(projectRoot, "rosync.toml");
   const rawText = await fs.readFile(configPath, "utf8");
-  const parsed = TOML.parse(rawText) as UnknownRecord;
+  const parsed = TOML.parse(rawText) as unknown;
+
+  if (!isConfigDocument(parsed)) {
+    throw new Error(`RoSync config at ${configPath} is not a TOML table.`);
+  }
+
+  return {
+    projectRoot,
+    configPath,
+    document: parsed,
+  };
+}
+
+export function ensureConfigSection(document: ConfigDocument, key: string): ConfigDocument {
+  const current = document[key];
+  if (isConfigDocument(current)) {
+    return current;
+  }
+
+  const nextSection: ConfigDocument = {};
+  document[key] = nextSection;
+  return nextSection;
+}
+
+export async function writeConfigDocument(configPath: string, document: ConfigDocument): Promise<void> {
+  await fs.writeFile(configPath, TOML.stringify(document as TOML.JsonMap), "utf8");
+}
+
+export async function loadConfig(startDir = process.cwd(), overrides?: ConfigOverrides): Promise<ResolvedRoSyncConfig> {
+  const { projectRoot, configPath, document: parsed } = await loadConfigDocument(startDir);
 
   const rawProject = isRecord(parsed.project) ? parsed.project : {};
   const rawSync = isRecord(parsed.sync) ? parsed.sync : {};

@@ -1,12 +1,12 @@
 # RoSync
 
-RoSync is an open-source, bidirectional sync stack for Roblox Studio and Visual Studio Code.
+RoSync is an open-source, bidirectional sync stack for Roblox Studio and editor integrations.
 
 This repository is being rebuilt around the architecture in `ROSYNC_AGENT_PROMPT.md`. The current target shape is:
 
 - `daemon/`: the RoSync CLI daemon and sync server
 - `plugin/`: the Roblox Studio plugin
-- `extension/`: the VS Code extension
+- `extension/`: the editor extension foundation (current first-party target: VS Code)
 - `docs/`: Docusaurus-compatible documentation
 - `install/`: cross-platform installer scripts
 
@@ -21,6 +21,12 @@ The fresh implementation starts with a new TypeScript daemon foundation:
 - `rosync schema update`
 - `rosync push`
 - `rosync pull`
+- `rosync place list`
+- `rosync place add`
+- `rosync place switch`
+- `rosync git init`
+- `rosync git commit`
+- `rosync git diff`
 - `rosync update`
 - `rosync uninstall`
 
@@ -32,7 +38,7 @@ The daemon now owns the new config, schema cache, ignore parsing, filesystem-bac
 - `.instance.json` discovery and script file detection
 - HTTP endpoints for health, status, schema, tree, and instance mutations
 - WebSocket handshake plus basic instance add/change/remove/rename handling
-- VS Code extension views for Explorer, Properties, and Status
+- editor extension views for Explorer, Properties, and Status
 - Studio plugin modules for daemon health checks, WebSocket connection, and change forwarding
 
 ## Why TypeScript
@@ -74,22 +80,24 @@ npm run build
 npm run test
 ```
 
-## Windows Local Install
+## Installation
 
-For a quick Windows setup that installs the Studio plugin into Roblox and creates a local CLI shim, run:
+For a quick PowerShell-based setup on Windows that installs the Studio plugin and creates a local CLI shim, run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1
 ```
 
-For macOS and Linux source installs:
+For macOS and Linux source installs from `bash` or `zsh`:
 
 ```bash
 bash install/macos/install.sh
 bash install/linux/install.sh
+zsh install/macos/install.sh
+zsh install/linux/install.sh
 ```
 
-Each installer writes install metadata to the platform-local RoSync meta directory so `rosync update` and `rosync uninstall` can find the linked source checkout later. The current source installers keep the checkout in place on uninstall instead of deleting the repository you installed from.
+Each installer writes install metadata to the platform-local RoSync meta directory so `rosync update` and `rosync uninstall` can find the linked source checkout later. The current source installers keep the checkout in place on uninstall instead of deleting the repository you installed from, and the Unix installers can add the CLI shim to `bash` and `zsh` shell profiles.
 
 Run the daemon against the bundled dev project:
 

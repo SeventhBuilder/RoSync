@@ -16,7 +16,7 @@ $shimPs1Path = Join-Path $shimDir "rosync.ps1"
 $metaDir = Join-Path $localAppData "RoSync\meta"
 $installPathFile = Join-Path $metaDir "install-path"
 $installMetadataPath = Join-Path $metaDir "install.json"
-$extensionId = "rosync.rosync-vscode"
+$extensionId = "rosync.rosync-extension"
 
 function Write-Step {
   param([string]$Message)
@@ -64,7 +64,7 @@ function Stop-RoSyncDaemon {
   }
 }
 
-function Uninstall-VsCodeExtension {
+function Uninstall-EditorExtension {
   if (-not (Get-Command code -ErrorAction SilentlyContinue)) {
     return
   }
@@ -119,8 +119,8 @@ Remove-Item -LiteralPath $installMetadataPath -Force -ErrorAction SilentlyContin
 Remove-Item -LiteralPath $installPathFile -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $metaDir -Force -ErrorAction SilentlyContinue
 
-Write-Step "Removing VS Code extension (best effort)"
-Uninstall-VsCodeExtension
+Write-Step "Removing editor extension (best effort)"
+Uninstall-EditorExtension
 
 if ($sourceInfo.SourceMode -eq "managed" -and (Test-Path -LiteralPath $sourceInfo.SourceDir)) {
   Write-Step "Removing managed source checkout"

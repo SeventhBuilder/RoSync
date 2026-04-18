@@ -53,12 +53,19 @@ export async function readRuntimeState(config: ResolvedRoSyncConfig): Promise<Ru
   try {
     const rawText = await fs.readFile(config.runtimePath, "utf8");
     const parsed = JSON.parse(rawText) as Partial<RuntimeState>;
+    const parsedConnections = (parsed.connections ?? {}) as Partial<RuntimeConnections> & { vscode?: number };
     return {
       ...EMPTY_RUNTIME_STATE,
       ...parsed,
       connections: {
         ...EMPTY_RUNTIME_STATE.connections,
-        ...(parsed.connections ?? {}),
+        ...parsedConnections,
+        editor:
+          typeof parsedConnections.editor === "number"
+            ? parsedConnections.editor
+            : typeof parsedConnections.vscode === "number"
+              ? parsedConnections.vscode
+              : EMPTY_RUNTIME_STATE.connections.editor,
       },
       summary: {
         ...EMPTY_RUNTIME_STATE.summary,
@@ -79,14 +86,18 @@ export async function writeRuntimeState(config: ResolvedRoSyncConfig, runtimeSta
   await fs.writeFile(config.runtimePath, JSON.stringify(runtimeState, null, 2), "utf8");
 }
 
-export function summarizeConnections(sessions: Array<{ role: "studio" | "vscode" | "unknown" }>): RuntimeConnections {
+export function summarizeConnections(sessions: Array<{ role: "studio" | "editor" | "vscode" | "unknown" }>): RuntimeConnections {
   const summary: RuntimeConnections = {
     studio: 0,
-    vscode: 0,
+    editor: 0,
     unknown: 0,
   };
 
   for (const session of sessions) {
+    if (session.role === "vscode") {
+      summary.editor += 1;
+      continue;
+    }
     summary[session.role] += 1;
   }
 

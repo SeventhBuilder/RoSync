@@ -6,7 +6,7 @@ RoSync is being rebuilt as a loopback-first, multi-part toolchain:
 
 1. A daemon CLI that owns config, schema cache, sync state, HTTP, and WebSocket transport
 2. A Roblox Studio plugin that observes and applies DataModel changes
-3. A VS Code extension that renders RoSync views and talks to the daemon
+3. An editor extension foundation that renders RoSync views and talks to the daemon
 4. Docs, installers, and tests treated as first-class deliverables
 
 ## Stack Choice
@@ -15,7 +15,7 @@ The prompt allows Rust or Node.js for the daemon. This repository is starting wi
 
 - `node` and `npm` are installed in the current environment
 - `cargo` and `rustc` are not installed
-- TypeScript keeps the CLI, VS Code extension, and shared protocol models aligned
+- TypeScript keeps the CLI, current VS Code integration, and shared protocol models aligned
 
 ## Daemon Shape
 

@@ -53,6 +53,19 @@ async function writeFileIfMissing(baseDir: string, filePath: string, content: st
   }
 }
 
+export async function ensureServiceSkeletons(targetDir: string, srcPath: string): Promise<string[]> {
+  const changes: string[] = [];
+  await fs.mkdir(srcPath, { recursive: true });
+
+  for (const serviceName of DEFAULT_SERVICES) {
+    const serviceDir = path.join(srcPath, serviceName);
+    await fs.mkdir(serviceDir, { recursive: true });
+    await writeFileIfMissing(targetDir, path.join(serviceDir, ".instance.json"), EMPTY_INSTANCE(serviceName), changes);
+  }
+
+  return changes;
+}
+
 export async function createProjectSkeleton(targetDir: string, templateName?: string, placeId?: number): Promise<string[]> {
   const projectName = defaultProjectNameForDirectory(targetDir);
   const changes: string[] = [];
@@ -64,12 +77,7 @@ export async function createProjectSkeleton(targetDir: string, templateName?: st
   await writeFileIfMissing(targetDir, path.join(targetDir, ".rosyncignore"), DEFAULT_IGNORE_FILE, changes);
   await writeFileIfMissing(targetDir, path.join(targetDir, ".gitignore"), PROJECT_GITIGNORE, changes);
   await writeFileIfMissing(targetDir, path.join(targetDir, "README.md"), PROJECT_README(projectName), changes);
-
-  for (const serviceName of DEFAULT_SERVICES) {
-    const serviceDir = path.join(targetDir, "src", serviceName);
-    await fs.mkdir(serviceDir, { recursive: true });
-    await writeFileIfMissing(targetDir, path.join(serviceDir, ".instance.json"), EMPTY_INSTANCE(serviceName), changes);
-  }
+  changes.push(...(await ensureServiceSkeletons(targetDir, path.join(targetDir, "src"))));
 
   if (templateName) {
     await writeFileIfMissing(

@@ -12,7 +12,7 @@ The current foundation scaffolds the DockWidget entry point and the module layou
 
 The legacy single-file prototype still exists elsewhere in the repo during the migration, but this folder is the new source of truth.
 
-## Windows Install
+## Installation
 
 For a local Windows dev install, run:
 
@@ -22,10 +22,19 @@ powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1
 
 That will:
 
-- build the daemon and extension
+- build the daemon and editor extension foundation
 - bundle `plugin/RoSync.plugin.luau`
 - copy the plugin into `%LOCALAPPDATA%\Roblox\Plugins\RoSync.plugin.lua`
 - create a local CLI shim at `%LOCALAPPDATA%\RoSync\bin\rosync.cmd`
+
+For Unix shells, the install scripts can be run from either `bash` or `zsh`:
+
+```bash
+bash install/linux/install.sh
+zsh install/linux/install.sh
+bash install/macos/install.sh
+zsh install/macos/install.sh
+```
 
 ## Build A Testable Plugin File
 
@@ -39,7 +48,7 @@ That writes:
 
 - `plugin/RoSync.plugin.luau`
 
-To test in Studio:
+To test the current foundation in Studio:
 
 1. Run `rosync watch` in your test project folder
 2. Open Roblox Studio

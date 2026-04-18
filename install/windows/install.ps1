@@ -4,6 +4,7 @@ param(
   [switch]$SkipBuild,
   [switch]$PluginOnly,
   [switch]$NoPath,
+  [switch]$SkipEditorExtension,
   [switch]$SkipVsCodeExtension,
   [switch]$Uninstall
 )
@@ -23,7 +24,7 @@ $metaDir = Join-Path $localAppData "RoSync\meta"
 $installPathFile = Join-Path $metaDir "install-path"
 $installMetadataPath = Join-Path $metaDir "install.json"
 $daemonEntry = Join-Path $repoRoot "daemon\dist\main.js"
-$extensionId = "rosync.rosync-vscode"
+$extensionId = "rosync.rosync-extension"
 
 function Write-Step {
   param([string]$Message)
@@ -154,13 +155,13 @@ function Write-InstallMetadata {
   $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $installMetadataPath -Encoding UTF8
 }
 
-function Install-VsCodeExtension {
-  if ($SkipVsCodeExtension) {
+function Install-EditorExtension {
+  if ($SkipEditorExtension -or $SkipVsCodeExtension) {
     return
   }
 
   if (Get-Command code -ErrorAction SilentlyContinue) {
-    Write-Host "VS Code extension packaging is not automated in the source installer yet; skipping automatic extension install."
+    Write-Host "Editor extension packaging is not automated in the source installer yet. The current first-party editor extension target is VS Code."
   }
 }
 
@@ -184,7 +185,7 @@ if (-not $SkipBuild) {
     Write-Step "Bundling Studio plugin"
     Invoke-InRepo -FilePath "node" -Arguments @("plugin/tools/bundle.mjs")
   } else {
-    Write-Step "Building daemon and extension"
+    Write-Step "Building daemon and editor extension"
     Invoke-InRepo -FilePath "npm" -Arguments @("run", "build")
     Write-Step "Bundling Studio plugin"
     Invoke-InRepo -FilePath "node" -Arguments @("plugin/tools/bundle.mjs")
@@ -197,7 +198,7 @@ if (-not $PluginOnly) {
   Install-Shims
   Add-ShimDirToUserPath
   Write-InstallMetadata
-  Install-VsCodeExtension
+  Install-EditorExtension
 }
 
 Write-Host ""

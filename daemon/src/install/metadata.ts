@@ -24,7 +24,7 @@ export interface InstallMetadata {
 
 const INSTALL_METADATA_FILENAME = "install.json";
 const INSTALL_PATH_FILENAME = "install-path";
-const DEFAULT_EXTENSION_ID = "rosync.rosync-vscode";
+const DEFAULT_EXTENSION_ID = "rosync.rosync-extension";
 
 type UnknownRecord = Record<string, unknown>;
 

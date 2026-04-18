@@ -32,5 +32,5 @@ export interface WatchServerContext {
   renameProjectNode(nodePath: string, newName: string): Promise<void>;
   moveProjectNode(oldPath: string, newPath: string): Promise<void>;
   deleteProjectNode(nodePath: string): Promise<void>;
-  broadcastToClients(role: "studio" | "vscode" | "unknown", payload: unknown): number;
+  broadcastToClients(role: "studio" | "editor" | "unknown", payload: unknown): number;
 }

@@ -5,7 +5,12 @@ SKIP_NPM_INSTALL=0
 SKIP_BUILD=0
 PLUGIN_ONLY=0
 NO_PATH=0
+SKIP_EDITOR_EXTENSION=0
 SKIP_VSCODE_EXTENSION=0
+
+PATH_MARKER_BEGIN="# >>> RoSync CLI >>>"
+PATH_MARKER_END="# <<< RoSync CLI <<<"
+PATH_EXPORT='export PATH="$HOME/.local/bin:$PATH"'
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -20,6 +25,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-path)
       NO_PATH=1
+      ;;
+    --skip-editor-extension)
+      SKIP_EDITOR_EXTENSION=1
       ;;
     --skip-vscode-extension)
       SKIP_VSCODE_EXTENSION=1
@@ -118,7 +126,7 @@ const payload = {
   pluginInstallPath,
   installScript,
   uninstallScript,
-  extensionId: "rosync.rosync-vscode",
+  extensionId: "rosync.rosync-extension",
 };
 
 fs.writeFileSync(path.join(metaDir, "install-path"), `${sourceDir}\n`, "utf8");
@@ -126,14 +134,36 @@ fs.writeFileSync(metadataPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 EOF
 }
 
-install_vscode_extension() {
-  if [ "$SKIP_VSCODE_EXTENSION" -eq 1 ]; then
+install_editor_extension() {
+  if [ "$SKIP_EDITOR_EXTENSION" -eq 1 ] || [ "$SKIP_VSCODE_EXTENSION" -eq 1 ]; then
     return
   fi
 
   if command -v code >/dev/null 2>&1; then
-    echo "VS Code extension packaging is not automated in the source installer yet; skipping automatic extension install."
+    echo "Editor extension packaging is not automated in the source installer yet. The current first-party editor extension target is VS Code."
   fi
+}
+
+ensure_shell_profile_path() {
+  PROFILE_PATH="$1"
+  if [ -f "$PROFILE_PATH" ] && grep -F "$PATH_MARKER_BEGIN" "$PROFILE_PATH" >/dev/null 2>&1; then
+    return
+  fi
+
+  {
+    printf "\n%s\n" "$PATH_MARKER_BEGIN"
+    printf "%s\n" "$PATH_EXPORT"
+    printf "%s\n" "$PATH_MARKER_END"
+  } >>"$PROFILE_PATH"
+}
+
+configure_shell_profiles() {
+  if [ "$NO_PATH" -eq 1 ]; then
+    return
+  fi
+
+  ensure_shell_profile_path "$HOME/.bashrc"
+  ensure_shell_profile_path "$HOME/.zshrc"
 }
 
 print_path_hint() {
@@ -145,7 +175,7 @@ print_path_hint() {
     *":$SHIM_DIR:"*)
       ;;
     *)
-      echo "Add $SHIM_DIR to your PATH if \`rosync\` is not found in a new terminal session."
+      echo "Added PATH setup for bash/zsh profiles. Open a new shell if \`rosync\` is not found immediately."
       ;;
   esac
 }
@@ -165,7 +195,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
     write_step "Bundling Studio plugin"
     (cd "$REPO_ROOT" && node plugin/tools/bundle.mjs)
   else
-    write_step "Building daemon and extension"
+    write_step "Building daemon and editor extension"
     (cd "$REPO_ROOT" && npm run build)
     write_step "Bundling Studio plugin"
     (cd "$REPO_ROOT" && node plugin/tools/bundle.mjs)
@@ -177,7 +207,8 @@ install_plugin
 if [ "$PLUGIN_ONLY" -eq 0 ]; then
   install_shim
   write_metadata
-  install_vscode_extension
+  install_editor_extension
+  configure_shell_profiles
   print_path_hint
 fi
 

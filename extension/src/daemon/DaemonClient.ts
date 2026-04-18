@@ -36,7 +36,7 @@ export interface DaemonHealth {
   };
   connections: {
     studio: number;
-    vscode: number;
+    editor: number;
     unknown: number;
   };
   schema: {

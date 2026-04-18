@@ -4,7 +4,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { SchemaCache } from "../schema/types.js";
 import type { WatchServerContext } from "./types.js";
 
-type ClientRole = "studio" | "vscode" | "unknown";
+type ClientRole = "studio" | "editor" | "unknown";
 
 interface ClientSession {
   id: string;
@@ -94,7 +94,11 @@ export function attachWebSocketServer(
         switch (type) {
           case "HELLO": {
             session.role =
-              payload.client === "studio" || payload.client === "vscode" ? payload.client : "unknown";
+              payload.client === "studio"
+                ? "studio"
+                : payload.client === "editor" || payload.client === "vscode"
+                  ? "editor"
+                  : "unknown";
             session.version = typeof payload.version === "string" ? payload.version : null;
             const schema = await context.getSchemaCache();
             safeSend(socket, {

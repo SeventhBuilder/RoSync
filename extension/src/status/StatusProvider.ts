@@ -52,7 +52,7 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
       new StatusItem("Script files", `${this.health.summary.scriptFiles}`),
       new StatusItem("Ignored entries", `${this.health.summary.ignoredEntries}`),
       new StatusItem("Studio clients", `${this.health.connections.studio}`),
-      new StatusItem("VS Code clients", `${this.health.connections.vscode}`),
+      new StatusItem("Editor clients", `${this.health.connections.editor}`),
       new StatusItem("Schema version", this.health.schema.version ?? "unknown"),
       new StatusItem("Schema fetched", this.health.schema.fetchedAt),
     ];

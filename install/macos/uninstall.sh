@@ -25,7 +25,9 @@ SHIM_PATH="$HOME/.local/bin/rosync"
 META_DIR="$HOME/.rosync-meta"
 INSTALL_METADATA_FILE="$META_DIR/install.json"
 INSTALL_PATH_FILE="$META_DIR/install-path"
-EXTENSION_ID="rosync.rosync-vscode"
+EXTENSION_ID="rosync.rosync-extension"
+PATH_MARKER_BEGIN="# >>> RoSync CLI >>>"
+PATH_MARKER_END="# <<< RoSync CLI <<<"
 
 confirm_uninstall() {
   if [ "$YES" -eq 1 ]; then
@@ -84,7 +86,30 @@ echo "==> Removing install metadata"
 rm -f "$INSTALL_METADATA_FILE" "$INSTALL_PATH_FILE"
 rmdir "$META_DIR" 2>/dev/null || true
 
-echo "==> Removing VS Code extension (best effort)"
+remove_shell_profile_path() {
+  PROFILE_PATH="$1"
+  if [ ! -f "$PROFILE_PATH" ]; then
+    return
+  fi
+
+  node - "$PROFILE_PATH" "$PATH_MARKER_BEGIN" "$PATH_MARKER_END" <<'EOF'
+const fs = require("node:fs");
+const [profilePath, begin, end] = process.argv.slice(2);
+const text = fs.readFileSync(profilePath, "utf8");
+const escapedBegin = begin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapedEnd = end.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const pattern = new RegExp(`\\n?${escapedBegin}[\\s\\S]*?${escapedEnd}\\n?`, "g");
+const next = text.replace(pattern, "\n").replace(/\n{3,}/g, "\n\n");
+if (next !== text) {
+  fs.writeFileSync(profilePath, next, "utf8");
+}
+EOF
+}
+
+remove_shell_profile_path "$HOME/.bashrc"
+remove_shell_profile_path "$HOME/.zshrc"
+
+echo "==> Removing editor extension (best effort)"
 if command -v code >/dev/null 2>&1; then
   code --uninstall-extension "$EXTENSION_ID" >/dev/null 2>&1 || true
 fi
