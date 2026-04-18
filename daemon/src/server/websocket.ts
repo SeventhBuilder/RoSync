@@ -22,6 +22,18 @@ export interface WebSocketRuntime {
   close(): Promise<void>;
 }
 
+function formatClientRole(role: ClientRole): string {
+  if (role === "studio") {
+    return "Studio";
+  }
+
+  if (role === "editor") {
+    return "Editor";
+  }
+
+  return "Unknown client";
+}
+
 function toMessageText(message: WebSocket.RawData): string {
   if (typeof message === "string") {
     return message;
@@ -84,6 +96,7 @@ export function attachWebSocketServer(
     };
 
     sessions.set(session.id, session);
+    context.logger.info(`WebSocket client connected; waiting for HELLO (${session.id.slice(0, 8)}).`);
     void emitSessionsChanged();
 
     socket.on("message", async (message) => {
@@ -100,6 +113,9 @@ export function attachWebSocketServer(
                   ? "editor"
                   : "unknown";
             session.version = typeof payload.version === "string" ? payload.version : null;
+            context.logger.info(
+              `${formatClientRole(session.role)} connected via WebSocket${session.version ? ` (v${session.version})` : ""}.`,
+            );
             const schema = await context.getSchemaCache();
             safeSend(socket, {
               type: "WELCOME",
@@ -266,6 +282,7 @@ export function attachWebSocketServer(
 
     socket.on("close", () => {
       sessions.delete(session.id);
+      context.logger.info(`${formatClientRole(session.role)} disconnected from WebSocket.`);
       void emitSessionsChanged();
     });
 

@@ -146,7 +146,7 @@ local function createButtonRow(labels)
 end
 
 createLabel(24, "RoSync", Enum.Font.GothamBold, 18, Color3.fromRGB(245, 247, 250))
-createLabel(38, "Studio plugin foundation with daemon health checks, WebSocket connection, and change forwarding.", Enum.Font.Gotham, 13, Color3.fromRGB(180, 188, 198))
+createLabel(38, "RoSync uses Studio Output for live connection logs while keeping sync controls in this panel.", Enum.Font.Gotham, 13, Color3.fromRGB(180, 188, 198))
 
 local serverUrlBox = createField("Server URL", DEFAULT_SERVER_URL)
 local statusLabel = createLabel(20, "Disconnected", Enum.Font.GothamMedium, 13, Color3.fromRGB(227, 95, 95))
@@ -193,12 +193,24 @@ local pollingThread = nil
 local connectSocket
 local pushServices
 
-local function appendLog(message)
-	if logBox.Text == "" then
-		logBox.Text = message
+local function writeOutput(message, level)
+	local formatted = "[RoSync Plugin] " .. tostring(message)
+	if level == "warn" or level == "error" then
+		warn(formatted)
 	else
-		logBox.Text ..= "\n\n" .. message
+		print(formatted)
 	end
+end
+
+local function appendLog(message, level)
+	local entry = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(message))
+	if logBox.Text == "" then
+		logBox.Text = entry
+	else
+		logBox.Text ..= "\n\n" .. entry
+	end
+
+	writeOutput(entry, level)
 end
 
 local function setStatus(text, color)
@@ -264,7 +276,7 @@ local function fetchAndApplyTree(reason)
 
 	local success, response = httpClient:getTree()
 	if not success then
-		appendLog("Tree fetch failed (" .. tostring(reason) .. "): " .. tostring(response))
+		appendLog("Tree fetch failed (" .. tostring(reason) .. "): " .. tostring(response), "warn")
 		refreshInFlight = false
 		return
 	end
@@ -273,10 +285,10 @@ local function fetchAndApplyTree(reason)
 	local applied, applyError = Deserializer.applyTree(response.tree)
 	applyInProgress = false
 
-	if applied then
+	if applied and reason ~= "poll" then
 		appendLog("Applied daemon tree (" .. tostring(reason) .. ").")
-	else
-		appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError))
+	elseif not applied then
+		appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError), "warn")
 	end
 
 	refreshInFlight = false
@@ -321,8 +333,6 @@ local function scheduleReconnect()
 end
 
 local function handleSocketMessage(message)
-	appendLog("WS <- " .. message)
-
 	local success, payload = pcall(function()
 		return HttpService:JSONDecode(message)
 	end)
@@ -334,7 +344,7 @@ local function handleSocketMessage(message)
 	if payload.type == "WELCOME" then
 		reconnectAttempt = 0
 		stopPolling()
-		appendLog("Daemon handshake complete.")
+		appendLog("Daemon handshake complete. Studio is now connected over WebSocket.")
 		fetchAndApplyTree("welcome")
 		return
 	end
@@ -347,7 +357,7 @@ local function handleSocketMessage(message)
 		if applied then
 			appendLog("Applied daemon project tree.")
 		else
-			appendLog("Project tree apply failed: " .. tostring(applyError))
+			appendLog("Project tree apply failed: " .. tostring(applyError), "warn")
 		end
 		return
 	end
@@ -370,7 +380,7 @@ local function handleSocketMessage(message)
 		if applied then
 			appendLog("Applied sync for " .. payload.path)
 		else
-			appendLog("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError))
+			appendLog("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError), "warn")
 		end
 		return
 	end
@@ -383,7 +393,7 @@ local function handleSocketMessage(message)
 		if removed then
 			appendLog("Removed " .. payload.path)
 		else
-			appendLog("Remove failed for " .. payload.path .. ": " .. tostring(removeError))
+			appendLog("Remove failed for " .. payload.path .. ": " .. tostring(removeError), "warn")
 		end
 		return
 	end
@@ -396,7 +406,7 @@ local function handleSocketMessage(message)
 		if renamed then
 			appendLog("Renamed " .. payload.oldPath .. " -> " .. payload.newPath)
 		else
-			appendLog("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError))
+			appendLog("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError), "warn")
 		end
 		return
 	end
@@ -412,12 +422,12 @@ local function handleSocketMessage(message)
 
 	if payload.type == "CONFLICT" then
 		setStatus("Conflict", Color3.fromRGB(242, 186, 82))
-		appendLog("Conflict: " .. tostring(payload.reason or payload.path))
+		appendLog("Conflict: " .. tostring(payload.reason or payload.path), "warn")
 		return
 	end
 
 	if payload.type == "ERROR" then
-		appendLog("Daemon error: " .. tostring(payload.message))
+		appendLog("Daemon error: " .. tostring(payload.message), "warn")
 	end
 end
 
@@ -426,15 +436,31 @@ connectSocket = function(isReconnect)
 	cancelReconnect()
 
 	socketClient = WebSocketClient.new(currentServerUrl(), {
+		onOpen = function()
+			appendLog("WebSocket opened.")
+		end,
 		onMessage = handleSocketMessage,
-		onClose = function()
+		onError = function(responseStatusCode, errorMessage)
+			appendLog(
+				"WebSocket error"
+					.. (responseStatusCode and responseStatusCode > 0 and (" (" .. tostring(responseStatusCode) .. ")") or "")
+					.. ": "
+					.. tostring(errorMessage),
+				"warn"
+			)
+		end,
+		onClose = function(wasConnected)
 			if socketClient then
 				socketClient:close()
 				socketClient = nil
 			end
 			if desiredConnection then
 				setStatus("Polling", Color3.fromRGB(242, 186, 82))
-				appendLog("WebSocket closed. Falling back to HTTP polling.")
+				appendLog(
+					wasConnected and "WebSocket closed. Falling back to HTTP polling."
+						or "WebSocket closed before the daemon handshake completed. Falling back to HTTP polling.",
+					"warn"
+				)
 				startPolling("socket-closed")
 				scheduleReconnect()
 				return
@@ -448,7 +474,7 @@ connectSocket = function(isReconnect)
 	local connected, errorMessage = socketClient:connect()
 	if not connected then
 		socketClient = nil
-		appendLog("WebSocket connect failed: " .. tostring(errorMessage))
+		appendLog("WebSocket connect failed: " .. tostring(errorMessage), "warn")
 		appendConnectionHint()
 		setStatus("Polling", Color3.fromRGB(242, 186, 82))
 		startPolling(isReconnect and "reconnect-fallback" or "initial-fallback")
@@ -457,15 +483,18 @@ connectSocket = function(isReconnect)
 	end
 
 	stopPolling()
-	sendMessage({
+	local helloSent = sendMessage({
 		type = "HELLO",
 		version = "0.1.0",
 		client = "studio",
 		clientId = clientId,
 	})
+	if not helloSent then
+		appendLog("Connected transport, but HELLO could not be sent.", "warn")
+	end
 
 	setStatus("Connected", Color3.fromRGB(126, 214, 149))
-	appendLog("Connected to RoSync daemon.")
+	appendLog("Connected to RoSync daemon at " .. currentServerUrl() .. ".")
 	return true
 end
 
@@ -543,12 +572,14 @@ buttons.Connect.MouseButton1Click:Connect(function()
 	desiredConnection = true
 	local success, response = httpClient:getHealth()
 	if success then
-		setStatus("Connected", Color3.fromRGB(126, 214, 149))
-		appendLog("HTTP health OK: " .. HttpService:JSONEncode(response))
+		setStatus("Connecting...", Color3.fromRGB(242, 186, 82))
+		appendLog(
+			"HTTP health OK for " .. currentServerUrl() .. " (project " .. tostring(response.project or "unknown") .. "). Opening WebSocket..."
+		)
 		connectSocket(false)
 	else
 		setStatus("Polling", Color3.fromRGB(242, 186, 82))
-		appendLog("HTTP health failed: " .. tostring(response))
+		appendLog("HTTP health failed: " .. tostring(response), "warn")
 		appendConnectionHint()
 		startPolling("health-check")
 		scheduleReconnect()
@@ -578,9 +609,21 @@ buttons.Status.MouseButton1Click:Connect(function()
 	httpClient:setBaseUrl(currentServerUrl())
 	local success, response = httpClient:getHealth()
 	if success then
-		appendLog("Status: " .. HttpService:JSONEncode(response))
+		local connections = response.connections or {}
+		appendLog(
+			"Status: project="
+				.. tostring(response.project or "unknown")
+				.. ", studio="
+				.. tostring(connections.studio or 0)
+				.. ", editor="
+				.. tostring(connections.editor or 0)
+				.. ", host="
+				.. tostring(response.host or "?")
+				.. ", port="
+				.. tostring(response.port or "?")
+		)
 	else
-		appendLog("Status failed: " .. tostring(response))
+		appendLog("Status failed: " .. tostring(response), "warn")
 	end
 end)
 
@@ -609,3 +652,4 @@ button.Click:Connect(function()
 end)
 
 refreshSelection()
+appendLog("RoSync plugin ready. Open View > Output to inspect live plugin logs.")

@@ -191,7 +191,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 	
 	createLabel(24, "RoSync", Enum.Font.GothamBold, 18, Color3.fromRGB(245, 247, 250))
-	createLabel(38, "Studio plugin foundation with daemon health checks, WebSocket connection, and change forwarding.", Enum.Font.Gotham, 13, Color3.fromRGB(180, 188, 198))
+	createLabel(38, "RoSync uses Studio Output for live connection logs while keeping sync controls in this panel.", Enum.Font.Gotham, 13, Color3.fromRGB(180, 188, 198))
 	
 	local serverUrlBox = createField("Server URL", DEFAULT_SERVER_URL)
 	local statusLabel = createLabel(20, "Disconnected", Enum.Font.GothamMedium, 13, Color3.fromRGB(227, 95, 95))
@@ -238,12 +238,24 @@ __modules['main.client'] = function(moduleRequire, script)
 	local connectSocket
 	local pushServices
 	
-	local function appendLog(message)
-		if logBox.Text == "" then
-			logBox.Text = message
+	local function writeOutput(message, level)
+		local formatted = "[RoSync Plugin] " .. tostring(message)
+		if level == "warn" or level == "error" then
+			warn(formatted)
 		else
-			logBox.Text ..= "\n\n" .. message
+			print(formatted)
 		end
+	end
+	
+	local function appendLog(message, level)
+		local entry = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(message))
+		if logBox.Text == "" then
+			logBox.Text = entry
+		else
+			logBox.Text ..= "\n\n" .. entry
+		end
+	
+		writeOutput(entry, level)
 	end
 	
 	local function setStatus(text, color)
@@ -309,7 +321,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		local success, response = httpClient:getTree()
 		if not success then
-			appendLog("Tree fetch failed (" .. tostring(reason) .. "): " .. tostring(response))
+			appendLog("Tree fetch failed (" .. tostring(reason) .. "): " .. tostring(response), "warn")
 			refreshInFlight = false
 			return
 		end
@@ -318,10 +330,10 @@ __modules['main.client'] = function(moduleRequire, script)
 		local applied, applyError = Deserializer.applyTree(response.tree)
 		applyInProgress = false
 	
-		if applied then
+		if applied and reason ~= "poll" then
 			appendLog("Applied daemon tree (" .. tostring(reason) .. ").")
-		else
-			appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError))
+		elseif not applied then
+			appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError), "warn")
 		end
 	
 		refreshInFlight = false
@@ -366,8 +378,6 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 	
 	local function handleSocketMessage(message)
-		appendLog("WS <- " .. message)
-	
 		local success, payload = pcall(function()
 			return HttpService:JSONDecode(message)
 		end)
@@ -379,7 +389,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		if payload.type == "WELCOME" then
 			reconnectAttempt = 0
 			stopPolling()
-			appendLog("Daemon handshake complete.")
+			appendLog("Daemon handshake complete. Studio is now connected over WebSocket.")
 			fetchAndApplyTree("welcome")
 			return
 		end
@@ -392,7 +402,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			if applied then
 				appendLog("Applied daemon project tree.")
 			else
-				appendLog("Project tree apply failed: " .. tostring(applyError))
+				appendLog("Project tree apply failed: " .. tostring(applyError), "warn")
 			end
 			return
 		end
@@ -415,7 +425,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			if applied then
 				appendLog("Applied sync for " .. payload.path)
 			else
-				appendLog("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError))
+				appendLog("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError), "warn")
 			end
 			return
 		end
@@ -428,7 +438,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			if removed then
 				appendLog("Removed " .. payload.path)
 			else
-				appendLog("Remove failed for " .. payload.path .. ": " .. tostring(removeError))
+				appendLog("Remove failed for " .. payload.path .. ": " .. tostring(removeError), "warn")
 			end
 			return
 		end
@@ -441,7 +451,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			if renamed then
 				appendLog("Renamed " .. payload.oldPath .. " -> " .. payload.newPath)
 			else
-				appendLog("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError))
+				appendLog("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError), "warn")
 			end
 			return
 		end
@@ -457,12 +467,12 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		if payload.type == "CONFLICT" then
 			setStatus("Conflict", Color3.fromRGB(242, 186, 82))
-			appendLog("Conflict: " .. tostring(payload.reason or payload.path))
+			appendLog("Conflict: " .. tostring(payload.reason or payload.path), "warn")
 			return
 		end
 	
 		if payload.type == "ERROR" then
-			appendLog("Daemon error: " .. tostring(payload.message))
+			appendLog("Daemon error: " .. tostring(payload.message), "warn")
 		end
 	end
 	
@@ -471,15 +481,31 @@ __modules['main.client'] = function(moduleRequire, script)
 		cancelReconnect()
 	
 		socketClient = WebSocketClient.new(currentServerUrl(), {
+			onOpen = function()
+				appendLog("WebSocket opened.")
+			end,
 			onMessage = handleSocketMessage,
-			onClose = function()
+			onError = function(responseStatusCode, errorMessage)
+				appendLog(
+					"WebSocket error"
+						.. (responseStatusCode and responseStatusCode > 0 and (" (" .. tostring(responseStatusCode) .. ")") or "")
+						.. ": "
+						.. tostring(errorMessage),
+					"warn"
+				)
+			end,
+			onClose = function(wasConnected)
 				if socketClient then
 					socketClient:close()
 					socketClient = nil
 				end
 				if desiredConnection then
 					setStatus("Polling", Color3.fromRGB(242, 186, 82))
-					appendLog("WebSocket closed. Falling back to HTTP polling.")
+					appendLog(
+						wasConnected and "WebSocket closed. Falling back to HTTP polling."
+							or "WebSocket closed before the daemon handshake completed. Falling back to HTTP polling.",
+						"warn"
+					)
 					startPolling("socket-closed")
 					scheduleReconnect()
 					return
@@ -493,7 +519,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		local connected, errorMessage = socketClient:connect()
 		if not connected then
 			socketClient = nil
-			appendLog("WebSocket connect failed: " .. tostring(errorMessage))
+			appendLog("WebSocket connect failed: " .. tostring(errorMessage), "warn")
 			appendConnectionHint()
 			setStatus("Polling", Color3.fromRGB(242, 186, 82))
 			startPolling(isReconnect and "reconnect-fallback" or "initial-fallback")
@@ -502,15 +528,18 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		stopPolling()
-		sendMessage({
+		local helloSent = sendMessage({
 			type = "HELLO",
 			version = "0.1.0",
 			client = "studio",
 			clientId = clientId,
 		})
+		if not helloSent then
+			appendLog("Connected transport, but HELLO could not be sent.", "warn")
+		end
 	
 		setStatus("Connected", Color3.fromRGB(126, 214, 149))
-		appendLog("Connected to RoSync daemon.")
+		appendLog("Connected to RoSync daemon at " .. currentServerUrl() .. ".")
 		return true
 	end
 	
@@ -588,12 +617,14 @@ __modules['main.client'] = function(moduleRequire, script)
 		desiredConnection = true
 		local success, response = httpClient:getHealth()
 		if success then
-			setStatus("Connected", Color3.fromRGB(126, 214, 149))
-			appendLog("HTTP health OK: " .. HttpService:JSONEncode(response))
+			setStatus("Connecting...", Color3.fromRGB(242, 186, 82))
+			appendLog(
+				"HTTP health OK for " .. currentServerUrl() .. " (project " .. tostring(response.project or "unknown") .. "). Opening WebSocket..."
+			)
 			connectSocket(false)
 		else
 			setStatus("Polling", Color3.fromRGB(242, 186, 82))
-			appendLog("HTTP health failed: " .. tostring(response))
+			appendLog("HTTP health failed: " .. tostring(response), "warn")
 			appendConnectionHint()
 			startPolling("health-check")
 			scheduleReconnect()
@@ -623,9 +654,21 @@ __modules['main.client'] = function(moduleRequire, script)
 		httpClient:setBaseUrl(currentServerUrl())
 		local success, response = httpClient:getHealth()
 		if success then
-			appendLog("Status: " .. HttpService:JSONEncode(response))
+			local connections = response.connections or {}
+			appendLog(
+				"Status: project="
+					.. tostring(response.project or "unknown")
+					.. ", studio="
+					.. tostring(connections.studio or 0)
+					.. ", editor="
+					.. tostring(connections.editor or 0)
+					.. ", host="
+					.. tostring(response.host or "?")
+					.. ", port="
+					.. tostring(response.port or "?")
+			)
 		else
-			appendLog("Status failed: " .. tostring(response))
+			appendLog("Status failed: " .. tostring(response), "warn")
 		end
 	end)
 	
@@ -654,6 +697,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	end)
 	
 	refreshSelection()
+	appendLog("RoSync plugin ready. Open View > Output to inspect live plugin logs.")
 	
 end
 
@@ -757,8 +801,11 @@ __modules['network/WebSocketClient'] = function(moduleRequire, script)
 		self.url = normalizeWebSocketUrl(baseUrl)
 		self.callbacks = callbacks or {}
 		self.socket = nil
+		self.isOpen = false
 		self.messageConnection = nil
 		self.closeConnection = nil
+		self.openConnection = nil
+		self.errorConnection = nil
 		return self
 	end
 	
@@ -766,13 +813,21 @@ __modules['network/WebSocketClient'] = function(moduleRequire, script)
 		self.url = normalizeWebSocketUrl(baseUrl)
 	end
 	
+	local function disconnect(connection)
+		if connection then
+			connection:Disconnect()
+		end
+	end
+	
 	function WebSocketClient:connect()
 		if self.socket then
-			return true
+			return self.isOpen, self.isOpen and nil or "WebSocket connection is already opening."
 		end
 	
 		local success, socket = pcall(function()
-			return HttpService:WebSocketConnect(self.url)
+			return HttpService:CreateWebStreamClient(Enum.WebStreamClientType.WebSocket, {
+				Url = self.url,
+			})
 		end)
 	
 		if not success then
@@ -780,27 +835,85 @@ __modules['network/WebSocketClient'] = function(moduleRequire, script)
 		end
 	
 		self.socket = socket
+		self.isOpen = false
+	
+		local settleEvent = Instance.new("BindableEvent")
+		local settled = false
+	
+		local function settle(result, message)
+			if settled then
+				return
+			end
+	
+			settled = true
+			settleEvent:Fire(result, message)
+		end
+	
+		self.openConnection = socket.Opened:Connect(function(responseStatusCode, headers)
+			self.isOpen = true
+			if self.callbacks.onOpen then
+				self.callbacks.onOpen(responseStatusCode, headers)
+			end
+			settle(true)
+		end)
+	
 		self.messageConnection = socket.MessageReceived:Connect(function(message)
 			if self.callbacks.onMessage then
 				self.callbacks.onMessage(message)
 			end
 		end)
-		self.closeConnection = socket.Close:Connect(function()
-			if self.callbacks.onClose then
-				self.callbacks.onClose()
+	
+		self.errorConnection = socket.Error:Connect(function(responseStatusCode, errorMessage)
+			local formatted = tostring(errorMessage)
+			if formatted == "" then
+				formatted = "WebSocket stream error."
 			end
+	
+			if self.callbacks.onError then
+				self.callbacks.onError(responseStatusCode, formatted)
+			end
+	
+			if not self.isOpen then
+				settle(false, formatted)
+			end
+		end)
+	
+		self.closeConnection = socket.Closed:Connect(function()
+			local wasOpen = self.isOpen
+			self.isOpen = false
+	
+			if not settled then
+				settle(false, "WebSocket closed before the connection opened.")
+			end
+	
+			if self.callbacks.onClose then
+				self.callbacks.onClose(wasOpen)
+			end
+	
 			self:close()
 		end)
+	
+		task.delay(5, function()
+			settle(false, "Timed out waiting for the WebSocket to open.")
+		end)
+	
+		local opened, errorMessage = settleEvent.Event:Wait()
+		settleEvent:Destroy()
+	
+		if not opened then
+			self:close()
+			return false, errorMessage
+		end
 	
 		return true
 	end
 	
 	function WebSocketClient:isConnected()
-		return self.socket ~= nil
+		return self.socket ~= nil and self.isOpen
 	end
 	
 	function WebSocketClient:send(payload)
-		if not self.socket then
+		if not self.socket or not self.isOpen then
 			return false, "No WebSocket connection."
 		end
 	
@@ -816,21 +929,24 @@ __modules['network/WebSocketClient'] = function(moduleRequire, script)
 	end
 	
 	function WebSocketClient:close()
-		if self.messageConnection then
-			self.messageConnection:Disconnect()
-			self.messageConnection = nil
-		end
+		local socket = self.socket
+		self.socket = nil
+		self.isOpen = false
 	
-		if self.closeConnection then
-			self.closeConnection:Disconnect()
-			self.closeConnection = nil
-		end
+		disconnect(self.messageConnection)
+		disconnect(self.closeConnection)
+		disconnect(self.openConnection)
+		disconnect(self.errorConnection)
 	
-		if self.socket then
+		self.messageConnection = nil
+		self.closeConnection = nil
+		self.openConnection = nil
+		self.errorConnection = nil
+	
+		if socket then
 			pcall(function()
-				self.socket:Close()
+				socket:Close()
 			end)
-			self.socket = nil
 		end
 	end
 	
@@ -959,8 +1075,7 @@ end
 __modules['sync/Serializer'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local CollectionService = game:GetService("CollectionService")
-	
-	local SchemaUtil = require(script.Parent.Parent.util.SchemaUtil)
+	local ReflectionService = game:GetService("ReflectionService")
 	
 	local Serializer = {}
 	
@@ -970,57 +1085,158 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 		ModuleScript = true,
 	}
 	
-	local function encodeValue(value)
-		local valueType = typeof(value)
+	local PROPERTY_DENYLIST = {
+		Parent = true,
+		Name = true,
+		ClassName = true,
+		Source = true,
+		LinkedSource = true,
+		ScriptGuid = true,
+		Tags = true,
+		Attributes = true,
+		AttributesReplicate = true,
+		AttributesSerialize = true,
+		DataCost = true,
+		UniqueId = true,
+		HistoryId = true,
+		Capabilities = true,
+		DefinesCapabilities = true,
+		numExpectedDirectChildren = true,
+		Children = true,
+	}
 	
-		if valueType == "number" or valueType == "string" or valueType == "boolean" then
+	local propertyCache = {}
+	
+	-- ── Helpers ──────────────────────────────────────────────────────────────────
+	
+	local function safeTostring(value)
+		local success, result = pcall(tostring, value)
+		return success and result or "<unprintable>"
+	end
+	
+	local function safeReadProperty(instance, propertyName)
+		local success, value = pcall(function()
+			return instance[propertyName]
+		end)
+		return success, success and value or nil
+	end
+	
+	local function safeReadStringProperty(instance, propertyName, fallback)
+		local success, value = safeReadProperty(instance, propertyName)
+		if success and type(value) == "string" and value ~= "" then
 			return value
 		end
+		return fallback
+	end
 	
-		if valueType == "Content" then
-			return {
-				type = "Content",
-				value = tostring(value),
-			}
+	-- ── Property name discovery via ReflectionService ────────────────────────────
+	-- Uses GetPropertiesOfClass — the correct ReflectionService API.
+	-- Returns a flat array of property descriptor tables, each with:
+	--   .Name    (string)
+	--   .Permits (table, optional) — has .Read/.Write fields if restricted
+	
+	local function getPropertyNamesForClass(className)
+		if propertyCache[className] ~= nil then
+			return propertyCache[className]
 		end
 	
-		if valueType == "BinaryString" then
-			return {
-				type = "BinaryString",
-				value = tostring(value),
-			}
+		local ok, props = pcall(function()
+			return ReflectionService:GetPropertiesOfClass(className)
+		end)
+	
+		if not ok or type(props) ~= "table" then
+			propertyCache[className] = {}
+			return {}
 		end
 	
-		if valueType == "Instance" then
-			return nil
+		local names = {}
+		for _, prop in ipairs(props) do
+			local name = prop.Name
+			if type(name) == "string" and not PROPERTY_DENYLIST[name] then
+				-- Only include properties we can actually write back
+				local permits = prop.Permits
+				local canWrite = permits == nil
+					or permits.Write ~= nil
+					or permits.WriteParallel ~= nil
+				if canWrite then
+					table.insert(names, name)
+				end
+			end
+		end
+	
+		table.sort(names)
+		propertyCache[className] = names
+		return names
+	end
+	
+	-- ── Value encoder ─────────────────────────────────────────────────────────────
+	
+	local function encodeNumber(value)
+		local valueType = "float"
+		if value == value
+			and value ~= math.huge
+			and value ~= -math.huge
+			and math.floor(value) == value
+		then
+			valueType = "int"
+		end
+		return { type = valueType, value = value }
+	end
+	
+	local function encodeValue(value)
+		if value == nil then return nil end
+	
+		local valueType = typeof(value)
+	
+		if valueType == "boolean" then
+			return { type = "bool", value = value }
+		end
+	
+		if valueType == "number" then
+			return encodeNumber(value)
+		end
+	
+		if valueType == "string" then
+			return { type = "string", value = value }
 		end
 	
 		if valueType == "Vector3" then
-			return {
-				type = "Vector3",
-				value = { value.X, value.Y, value.Z },
-			}
+			return { type = "Vector3", value = { value.X, value.Y, value.Z } }
 		end
 	
-		if valueType == "Vector2" then
-			return {
-				type = "Vector2",
-				value = { value.X, value.Y },
-			}
+		if valueType == "CFrame" then
+			return { type = "CFrame", value = { value:GetComponents() } }
 		end
 	
 		if valueType == "Color3" then
+			return { type = "Color3", value = { value.R, value.G, value.B } }
+		end
+	
+		if valueType == "BrickColor" then
+			return { type = "BrickColor", value = value.Number }
+		end
+	
+		if valueType == "UDim2" then
 			return {
-				type = "Color3",
-				value = { value.R, value.G, value.B },
+				type = "UDim2",
+				value = { value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset },
 			}
 		end
 	
+		if valueType == "UDim" then
+			return { type = "UDim", value = { value.Scale, value.Offset } }
+		end
+	
 		if valueType == "NumberRange" then
-			return {
-				type = "NumberRange",
-				value = { value.Min, value.Max },
-			}
+			return { type = "NumberRange", value = { value.Min, value.Max } }
+		end
+	
+		if valueType == "EnumItem" then
+			return { type = "EnumItem", value = tostring(value) }
+		end
+	
+		if valueType == "Vector2" then
+			return { type = "Vector2", value = { value.X, value.Y } }
 		end
 	
 		if valueType == "Rect" then
@@ -1030,215 +1246,97 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			}
 		end
 	
-		if valueType == "Ray" then
-			return {
-				type = "Ray",
-				value = {
-					{ value.Origin.X, value.Origin.Y, value.Origin.Z },
-					{ value.Direction.X, value.Direction.Y, value.Direction.Z },
-				},
-			}
-		end
-	
-		if valueType == "PhysicalProperties" then
-			return {
-				type = "PhysicalProperties",
-				value = {
-					value.Density,
-					value.Friction,
-					value.Elasticity,
-					value.FrictionWeight,
-					value.ElasticityWeight,
-				},
-			}
-		end
-	
-		if valueType == "Axes" then
-			local axes = {}
-			if value.X then
-				table.insert(axes, "X")
+		if valueType == "ColorSequence" then
+			local keypoints = {}
+			for _, kp in ipairs(value.Keypoints) do
+				table.insert(keypoints, { time = kp.Time, color = { kp.Value.R, kp.Value.G, kp.Value.B } })
 			end
-			if value.Y then
-				table.insert(axes, "Y")
-			end
-			if value.Z then
-				table.insert(axes, "Z")
-			end
-			return {
-				type = "Axes",
-				value = axes,
-			}
-		end
-	
-		if valueType == "Faces" then
-			local faces = {}
-			if value.Top then
-				table.insert(faces, "Top")
-			end
-			if value.Bottom then
-				table.insert(faces, "Bottom")
-			end
-			if value.Left then
-				table.insert(faces, "Left")
-			end
-			if value.Right then
-				table.insert(faces, "Right")
-			end
-			if value.Back then
-				table.insert(faces, "Back")
-			end
-			if value.Front then
-				table.insert(faces, "Front")
-			end
-			return {
-				type = "Faces",
-				value = faces,
-			}
+			return { type = "ColorSequence", value = keypoints }
 		end
 	
 		if valueType == "NumberSequence" then
 			local keypoints = {}
-			for _, keypoint in ipairs(value.Keypoints) do
-				table.insert(keypoints, { keypoint.Time, keypoint.Value, keypoint.Envelope })
+			for _, kp in ipairs(value.Keypoints) do
+				table.insert(keypoints, { time = kp.Time, value = kp.Value, envelope = kp.Envelope })
 			end
-			return {
-				type = "NumberSequence",
-				value = keypoints,
-			}
+			return { type = "NumberSequence", value = keypoints }
 		end
 	
-		if valueType == "ColorSequence" then
-			local keypoints = {}
-			for _, keypoint in ipairs(value.Keypoints) do
-				table.insert(keypoints, {
-					keypoint.Time,
-					{ keypoint.Value.R, keypoint.Value.G, keypoint.Value.B },
-				})
-			end
-			return {
-				type = "ColorSequence",
-				value = keypoints,
-			}
-		end
-	
-		if valueType == "Font" then
-			return {
-				type = "Font",
-				value = {
-					Family = value.Family,
-					Weight = tostring(value.Weight),
-					Style = tostring(value.Style),
-				},
-			}
-		end
-	
-		if valueType == "UDim2" then
-			return {
-				type = "UDim2",
-				value = {
-					value.X.Scale,
-					value.X.Offset,
-					value.Y.Scale,
-					value.Y.Offset,
-				},
-			}
-		end
-	
-		if valueType == "UDim" then
-			return {
-				type = "UDim",
-				value = { value.Scale, value.Offset },
-			}
-		end
-	
-		if valueType == "CFrame" then
-			return {
-				type = "CFrame",
-				value = { value:GetComponents() },
-			}
-		end
-	
-		if valueType == "BrickColor" then
-			return {
-				type = "BrickColor",
-				value = value.Number,
-			}
-		end
-	
-		if valueType == "EnumItem" then
-			return {
-				type = "EnumItem",
-				value = tostring(value),
-			}
-		end
-	
-		return {
-			type = valueType,
-			value = tostring(value),
-		}
+		return { type = "unknown", raw = safeTostring(value) }
 	end
 	
-	local function encodePropertyValue(instance, propertyName, propertyValue)
-		if propertyName == "PrimaryPart" then
-			if propertyValue then
-				return {
-					type = "InstanceRef",
-					value = {
-						name = propertyValue.Name,
-					},
-				}
-			end
-			return nil
-		end
+	-- ── Attribute encoder ─────────────────────────────────────────────────────────
 	
-		return encodeValue(propertyValue)
-	end
-	
-	local function safeScriptSource(instance)
-		if not SCRIPT_CLASS_NAMES[instance.ClassName] then
-			return nil
-		end
-	
-		local success, source = pcall(function()
-			return instance.Source
+	local function encodeAttributes(instance)
+		local success, attributes = pcall(function()
+			return instance:GetAttributes()
 		end)
+		if not success or type(attributes) ~= "table" then return {} end
 	
-		if success and type(source) == "string" then
-			return source
+		local encoded = {}
+		for attrName, attrValue in pairs(attributes) do
+			encoded[attrName] = encodeValue(attrValue)
 		end
+		return encoded
+	end
 	
+	-- ── Script source ─────────────────────────────────────────────────────────────
+	
+	local function safeScriptSource(instance, className)
+		if not SCRIPT_CLASS_NAMES[className] then return nil end
+		local success, source = safeReadProperty(instance, "Source")
+		if success and type(source) == "string" then return source end
 		return nil
 	end
 	
+	-- ── Collection helpers ────────────────────────────────────────────────────────
+	
+	local function safeGetTags(instance)
+		local success, tags = pcall(function()
+			return CollectionService:GetTags(instance)
+		end)
+		return (success and type(tags) == "table") and tags or {}
+	end
+	
+	local function safeGetChildren(instance)
+		local success, children = pcall(function()
+			return instance:GetChildren()
+		end)
+		return (success and type(children) == "table") and children or {}
+	end
+	
+	-- ── Public API ────────────────────────────────────────────────────────────────
+	
 	function Serializer.serializeInstance(instance, deep)
+		local className = safeReadStringProperty(instance, "ClassName", "Instance")
+		local name = safeReadStringProperty(instance, "Name", className)
+	
 		local serialized = {
-			name = instance.Name,
-			className = instance.ClassName,
+			name = name,
+			className = className,
 			properties = {},
-			attributes = instance:GetAttributes(),
-			tags = CollectionService:GetTags(instance),
+			attributes = encodeAttributes(instance),
+			tags = safeGetTags(instance),
 			children = {},
 		}
 	
-		for _, propertyName in ipairs(SchemaUtil.getSyncableProperties(instance.ClassName)) do
-			local success, propertyValue = pcall(function()
-				return instance[propertyName]
-			end)
+		for _, propertyName in ipairs(getPropertyNamesForClass(className)) do
+			local success, propertyValue = safeReadProperty(instance, propertyName)
 			if success then
-				local encoded = encodePropertyValue(instance, propertyName, propertyValue)
-				if encoded ~= nil then
-					serialized.properties[propertyName] = encoded
+				local encodedValue = encodeValue(propertyValue)
+				if encodedValue ~= nil then
+					serialized.properties[propertyName] = encodedValue
 				end
 			end
 		end
 	
-		local source = safeScriptSource(instance)
+		local source = safeScriptSource(instance, className)
 		if source ~= nil then
 			serialized.source = source
 		end
 	
 		if deep then
-			for _, child in ipairs(instance:GetChildren()) do
+			for _, child in ipairs(safeGetChildren(instance)) do
 				table.insert(serialized.children, Serializer.serializeInstance(child, true))
 			end
 		end

@@ -254,6 +254,7 @@ export function registerWatchCommand(program: Command): void {
       console.log(`RoSync daemon listening on http://${config.sync.host}:${config.sync.port}`);
       console.log(`WebSocket endpoint: ws://${config.sync.host}:${config.sync.port}`);
       console.log(`Watching: ${config.srcDir}`);
+      console.log("Waiting for Studio and editor connections...");
 
       await new Promise<void>((resolve, reject) => {
         let shuttingDown = false;
