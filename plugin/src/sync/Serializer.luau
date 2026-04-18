@@ -1,6 +1,5 @@
 local CollectionService = game:GetService("CollectionService")
-
-local SchemaUtil = require(script.Parent.Parent.util.SchemaUtil)
+local ReflectionService = game:GetService("ReflectionService")
 
 local Serializer = {}
 
@@ -10,29 +9,202 @@ local SCRIPT_CLASS_NAMES = {
 	ModuleScript = true,
 }
 
-local function encodeValue(value)
-	local valueType = typeof(value)
+local PROPERTY_DENYLIST = {
+	Parent = true,
+	Name = true,
+	ClassName = true,
+	Source = true,
+	LinkedSource = true,
+	ScriptGuid = true,
+	Tags = true,
+	Attributes = true,
+	AttributesReplicate = true,
+	AttributesSerialize = true,
+	DataCost = true,
+	UniqueId = true,
+	HistoryId = true,
+	Capabilities = true,
+	DefinesCapabilities = true,
+	numExpectedDirectChildren = true,
+	Children = true,
+}
 
-	if valueType == "number" or valueType == "string" or valueType == "boolean" then
+local propertyCache = {}
+
+local function safeTostring(value)
+	local success, result = pcall(function()
+		return tostring(value)
+	end)
+
+	if success then
+		return result
+	end
+
+	return "<unprintable>"
+end
+
+local function safeReadProperty(instance, propertyName)
+	local success, value = pcall(function()
+		return instance[propertyName]
+	end)
+
+	if success then
+		return true, value
+	end
+
+	return false, nil
+end
+
+local function safeReadStringProperty(instance, propertyName, fallback)
+	local success, value = safeReadProperty(instance, propertyName)
+	if success and type(value) == "string" and value ~= "" then
 		return value
 	end
 
-	if valueType == "Content" then
-		return {
-			type = "Content",
-			value = tostring(value),
-		}
+	return fallback
+end
+
+local function readMemberKind(rawMemberKind)
+	if type(rawMemberKind) == "string" then
+		return rawMemberKind
 	end
 
-	if valueType == "BinaryString" then
-		return {
-			type = "BinaryString",
-			value = tostring(value),
-		}
+	if type(rawMemberKind) == "table" then
+		if type(rawMemberKind.Name) == "string" then
+			return rawMemberKind.Name
+		end
+
+		if type(rawMemberKind.name) == "string" then
+			return rawMemberKind.name
+		end
 	end
 
-	if valueType == "Instance" then
+	return nil
+end
+
+local function canSyncPropertyDescriptor(propertyDescriptor)
+	local permits = propertyDescriptor.Permits or propertyDescriptor.permits
+
+	if type(permits) ~= "table" then
+		return true
+	end
+
+	local canRead = permits.Read ~= nil or permits.ReadParallel ~= nil
+	local canWrite = permits.Write ~= nil or permits.WriteParallel ~= nil
+
+	return canRead and canWrite
+end
+
+local function isPropertyDescriptor(candidate)
+	if type(candidate) ~= "table" then
+		return false
+	end
+
+	local propertyName = candidate.Name or candidate.name
+	if type(propertyName) ~= "string" or PROPERTY_DENYLIST[propertyName] then
+		return false
+	end
+
+	local memberKind = readMemberKind(candidate.MemberType or candidate.memberType or candidate.Kind or candidate.kind)
+	if memberKind ~= nil and memberKind ~= "Property" then
+		return false
+	end
+
+	if memberKind == nil then
+		local looksLikePropertyDescriptor = candidate.Type ~= nil
+			or candidate.type ~= nil
+			or candidate.ValueType ~= nil
+			or candidate.valueType ~= nil
+
+		if not looksLikePropertyDescriptor then
+			return false
+		end
+	end
+
+	if candidate.Serialized == false or candidate.serialized == false then
+		return false
+	end
+
+	return canSyncPropertyDescriptor(candidate)
+end
+
+local function collectPropertyNames(node, propertyNames, visited)
+	if type(node) ~= "table" or visited[node] then
+		return
+	end
+
+	visited[node] = true
+
+	if isPropertyDescriptor(node) then
+		propertyNames[node.Name or node.name] = true
+	end
+
+	for _, nested in pairs(node) do
+		if type(nested) == "table" then
+			collectPropertyNames(nested, propertyNames, visited)
+		end
+	end
+end
+
+local function getPropertyNamesForClass(className)
+	if propertyCache[className] ~= nil then
+		return propertyCache[className]
+	end
+
+	local propertyNames = {}
+	local success, classDescriptor = pcall(function()
+		return ReflectionService:GetClassDescriptor(className)
+	end)
+
+	if success and type(classDescriptor) == "table" then
+		collectPropertyNames(classDescriptor, propertyNames, {})
+	end
+
+	local properties = {}
+	for propertyName in pairs(propertyNames) do
+		table.insert(properties, propertyName)
+	end
+
+	table.sort(properties)
+	propertyCache[className] = properties
+	return properties
+end
+
+local function encodeNumber(value)
+	local valueType = "float"
+	if value == value and value ~= math.huge and value ~= -math.huge and math.floor(value) == value then
+		valueType = "int"
+	end
+
+	return {
+		type = valueType,
+		value = value,
+	}
+end
+
+local function encodeValue(value)
+	if value == nil then
 		return nil
+	end
+
+	local valueType = typeof(value)
+
+	if valueType == "boolean" then
+		return {
+			type = "bool",
+			value = value,
+		}
+	end
+
+	if valueType == "number" then
+		return encodeNumber(value)
+	end
+
+	if valueType == "string" then
+		return {
+			type = "string",
+			value = value,
+		}
 	end
 
 	if valueType == "Vector3" then
@@ -42,10 +214,10 @@ local function encodeValue(value)
 		}
 	end
 
-	if valueType == "Vector2" then
+	if valueType == "CFrame" then
 		return {
-			type = "Vector2",
-			value = { value.X, value.Y },
+			type = "CFrame",
+			value = { value:GetComponents() },
 		}
 	end
 
@@ -56,119 +228,10 @@ local function encodeValue(value)
 		}
 	end
 
-	if valueType == "NumberRange" then
+	if valueType == "BrickColor" then
 		return {
-			type = "NumberRange",
-			value = { value.Min, value.Max },
-		}
-	end
-
-	if valueType == "Rect" then
-		return {
-			type = "Rect",
-			value = { value.Min.X, value.Min.Y, value.Max.X, value.Max.Y },
-		}
-	end
-
-	if valueType == "Ray" then
-		return {
-			type = "Ray",
-			value = {
-				{ value.Origin.X, value.Origin.Y, value.Origin.Z },
-				{ value.Direction.X, value.Direction.Y, value.Direction.Z },
-			},
-		}
-	end
-
-	if valueType == "PhysicalProperties" then
-		return {
-			type = "PhysicalProperties",
-			value = {
-				value.Density,
-				value.Friction,
-				value.Elasticity,
-				value.FrictionWeight,
-				value.ElasticityWeight,
-			},
-		}
-	end
-
-	if valueType == "Axes" then
-		local axes = {}
-		if value.X then
-			table.insert(axes, "X")
-		end
-		if value.Y then
-			table.insert(axes, "Y")
-		end
-		if value.Z then
-			table.insert(axes, "Z")
-		end
-		return {
-			type = "Axes",
-			value = axes,
-		}
-	end
-
-	if valueType == "Faces" then
-		local faces = {}
-		if value.Top then
-			table.insert(faces, "Top")
-		end
-		if value.Bottom then
-			table.insert(faces, "Bottom")
-		end
-		if value.Left then
-			table.insert(faces, "Left")
-		end
-		if value.Right then
-			table.insert(faces, "Right")
-		end
-		if value.Back then
-			table.insert(faces, "Back")
-		end
-		if value.Front then
-			table.insert(faces, "Front")
-		end
-		return {
-			type = "Faces",
-			value = faces,
-		}
-	end
-
-	if valueType == "NumberSequence" then
-		local keypoints = {}
-		for _, keypoint in ipairs(value.Keypoints) do
-			table.insert(keypoints, { keypoint.Time, keypoint.Value, keypoint.Envelope })
-		end
-		return {
-			type = "NumberSequence",
-			value = keypoints,
-		}
-	end
-
-	if valueType == "ColorSequence" then
-		local keypoints = {}
-		for _, keypoint in ipairs(value.Keypoints) do
-			table.insert(keypoints, {
-				keypoint.Time,
-				{ keypoint.Value.R, keypoint.Value.G, keypoint.Value.B },
-			})
-		end
-		return {
-			type = "ColorSequence",
-			value = keypoints,
-		}
-	end
-
-	if valueType == "Font" then
-		return {
-			type = "Font",
-			value = {
-				Family = value.Family,
-				Weight = tostring(value.Weight),
-				Style = tostring(value.Style),
-			},
+			type = "BrickColor",
+			value = value.Number,
 		}
 	end
 
@@ -191,17 +254,10 @@ local function encodeValue(value)
 		}
 	end
 
-	if valueType == "CFrame" then
+	if valueType == "NumberRange" then
 		return {
-			type = "CFrame",
-			value = { value:GetComponents() },
-		}
-	end
-
-	if valueType == "BrickColor" then
-		return {
-			type = "BrickColor",
-			value = value.Number,
+			type = "NumberRange",
+			value = { value.Min, value.Max },
 		}
 	end
 
@@ -213,36 +269,34 @@ local function encodeValue(value)
 	end
 
 	return {
-		type = valueType,
-		value = tostring(value),
+		type = "unknown",
+		raw = safeTostring(value),
 	}
 end
 
-local function encodePropertyValue(instance, propertyName, propertyValue)
-	if propertyName == "PrimaryPart" then
-		if propertyValue then
-			return {
-				type = "InstanceRef",
-				value = {
-					name = propertyValue.Name,
-				},
-			}
-		end
-		return nil
-	end
-
-	return encodeValue(propertyValue)
-end
-
-local function safeScriptSource(instance)
-	if not SCRIPT_CLASS_NAMES[instance.ClassName] then
-		return nil
-	end
-
-	local success, source = pcall(function()
-		return instance.Source
+local function encodeAttributes(instance)
+	local success, attributes = pcall(function()
+		return instance:GetAttributes()
 	end)
 
+	if not success or type(attributes) ~= "table" then
+		return {}
+	end
+
+	local encodedAttributes = {}
+	for attributeName, attributeValue in pairs(attributes) do
+		encodedAttributes[attributeName] = encodeValue(attributeValue)
+	end
+
+	return encodedAttributes
+end
+
+local function safeScriptSource(instance, className)
+	if not SCRIPT_CLASS_NAMES[className] then
+		return nil
+	end
+
+	local success, source = safeReadProperty(instance, "Source")
 	if success and type(source) == "string" then
 		return source
 	end
@@ -250,35 +304,60 @@ local function safeScriptSource(instance)
 	return nil
 end
 
+local function safeGetTags(instance)
+	local success, tags = pcall(function()
+		return CollectionService:GetTags(instance)
+	end)
+
+	if success and type(tags) == "table" then
+		return tags
+	end
+
+	return {}
+end
+
+local function safeGetChildren(instance)
+	local success, children = pcall(function()
+		return instance:GetChildren()
+	end)
+
+	if success and type(children) == "table" then
+		return children
+	end
+
+	return {}
+end
+
 function Serializer.serializeInstance(instance, deep)
+	local className = safeReadStringProperty(instance, "ClassName", "Instance")
+	local name = safeReadStringProperty(instance, "Name", className)
+
 	local serialized = {
-		name = instance.Name,
-		className = instance.ClassName,
+		name = name,
+		className = className,
 		properties = {},
-		attributes = instance:GetAttributes(),
-		tags = CollectionService:GetTags(instance),
+		attributes = encodeAttributes(instance),
+		tags = safeGetTags(instance),
 		children = {},
 	}
 
-	for _, propertyName in ipairs(SchemaUtil.getSyncableProperties(instance.ClassName)) do
-		local success, propertyValue = pcall(function()
-			return instance[propertyName]
-		end)
+	for _, propertyName in ipairs(getPropertyNamesForClass(className)) do
+		local success, propertyValue = safeReadProperty(instance, propertyName)
 		if success then
-			local encoded = encodePropertyValue(instance, propertyName, propertyValue)
-			if encoded ~= nil then
-				serialized.properties[propertyName] = encoded
+			local encodedValue = encodeValue(propertyValue)
+			if encodedValue ~= nil then
+				serialized.properties[propertyName] = encodedValue
 			end
 		end
 	end
 
-	local source = safeScriptSource(instance)
+	local source = safeScriptSource(instance, className)
 	if source ~= nil then
 		serialized.source = source
 	end
 
 	if deep then
-		for _, child in ipairs(instance:GetChildren()) do
+		for _, child in ipairs(safeGetChildren(instance)) do
 			table.insert(serialized.children, Serializer.serializeInstance(child, true))
 		end
 	end
