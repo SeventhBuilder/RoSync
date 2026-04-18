@@ -6,10 +6,10 @@ import {
   DEFAULT_SERVICES,
   type GitSection,
   type IgnoreSection,
+  type NetworkSection,
   type ProjectSection,
   type PlacesSection,
   type ResolvedRoSyncConfig,
-  type RoSyncConfig,
   type SyncSection,
   type TeamSection,
 } from "./types.js";
@@ -109,6 +109,7 @@ export interface LoadedConfigDocument {
 export interface ConfigOverrides {
   project?: Partial<ProjectSection>;
   sync?: Partial<SyncSection>;
+  network?: Partial<NetworkSection>;
   git?: Partial<GitSection>;
   places?: Partial<ResolvedRoSyncConfig["places"]>;
   team?: Partial<TeamSection>;
@@ -123,6 +124,8 @@ export function renderDefaultConfig(projectName: string, placeId?: number): stri
     `name = "${projectName}"`,
     'version = "1.0.0"',
     `game_id = ${selectedPlaceId}`,
+    "",
+    "network = true",
     "",
     "[sync]",
     "port = 34872",
@@ -250,6 +253,9 @@ export async function loadConfig(startDir = process.cwd(), overrides?: ConfigOve
       autoSchemaUpdate: readBoolean(rawSync.auto_schema_update, DEFAULT_CONFIG.sync.autoSchemaUpdate),
       debounceMs: readNumber(rawSync.debounce_ms, DEFAULT_CONFIG.sync.debounceMs),
     },
+    network: {
+      enabled: readBoolean(parsed.network, readBoolean(rawSync.network, DEFAULT_CONFIG.network.enabled)),
+    },
     git: {
       enabled: readBoolean(rawGit.enabled, DEFAULT_CONFIG.git.enabled),
       autoCommit: readBoolean(rawGit.auto_commit, DEFAULT_CONFIG.git.autoCommit),
@@ -280,6 +286,7 @@ export async function loadConfig(startDir = process.cwd(), overrides?: ConfigOve
       ...mergedSync,
       host: assertLoopbackHost(mergedSync.host),
     },
+    network: mergeDefined(resolved.network, overrides?.network),
     git: mergeDefined(resolved.git, overrides?.git),
     places: {
       ...mergeDefined(resolved.places, overrides?.places),

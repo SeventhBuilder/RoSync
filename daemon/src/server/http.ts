@@ -61,6 +61,8 @@ async function routeRequest(
       src: context.config.sync.src,
       connections: context.getConnections(),
       summary: context.getSummary(),
+      diagnostics: context.getDiagnostics(),
+      conflicts: context.getConflicts(),
       schema: schema.metadata,
       now: new Date().toISOString(),
     });
@@ -70,9 +72,51 @@ async function routeRequest(
   if (request.method === "GET" && requestUrl.pathname === "/status") {
     sendJson(response, 200, {
       ok: true,
+      runtime: context.getRuntimeState(),
       summary: context.getSummary(),
+      diagnostics: context.getDiagnostics(),
       connections: context.getConnections(),
+      conflicts: context.getConflicts(),
       schema: schema.metadata,
+    });
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/conflicts") {
+    sendJson(response, 200, {
+      ok: true,
+      conflicts: context.getConflicts(),
+    });
+    return;
+  }
+
+  if (request.method === "POST" && requestUrl.pathname === "/api/conflicts/resolve") {
+    const body = await readJsonBody(request);
+    const conflictId = typeof body.id === "string" ? body.id : null;
+    const strategy =
+      body.strategy === "ours" || body.strategy === "theirs" || body.strategy === "manual" ? body.strategy : null;
+
+    if (!conflictId || !strategy) {
+      sendJson(response, 400, {
+        ok: false,
+        error: "Expected { id, strategy } with strategy one of ours, theirs, manual.",
+      });
+      return;
+    }
+
+    const resolved = await context.resolveConflict(conflictId, strategy);
+    if (!resolved) {
+      sendJson(response, 404, {
+        ok: false,
+        error: `Conflict ${conflictId} was not found.`,
+      });
+      return;
+    }
+
+    sendJson(response, 200, {
+      ok: true,
+      resolved: true,
+      conflicts: context.getConflicts(),
     });
     return;
   }
@@ -140,11 +184,6 @@ async function routeRequest(
     }
 
     await context.createProjectNode(parentPath, name, className);
-    await context.refreshProjectState();
-    context.broadcastToClients("studio", {
-      type: "INSTANCE_ADDED",
-      path: `${parentPath}/${name}`,
-    });
     sendJson(response, 200, {
       ok: true,
       node: await context.getProjectNode(`${parentPath}/${name}`),
@@ -167,12 +206,6 @@ async function routeRequest(
 
     if (typeof body.newPath === "string") {
       await context.moveProjectNode(nodePath, body.newPath);
-      await context.refreshProjectState();
-      context.broadcastToClients("studio", {
-        type: "INSTANCE_RENAMED",
-        oldPath: nodePath,
-        newPath: body.newPath,
-      });
       sendJson(response, 200, {
         ok: true,
         node: await context.getProjectNode(body.newPath),
@@ -183,14 +216,8 @@ async function routeRequest(
 
     if (typeof body.newName === "string") {
       await context.renameProjectNode(nodePath, body.newName);
-      await context.refreshProjectState();
       const parentPath = nodePath.split("/").slice(0, -1).join("/");
       const nextPath = parentPath ? `${parentPath}/${body.newName}` : body.newName;
-      context.broadcastToClients("studio", {
-        type: "INSTANCE_RENAMED",
-        oldPath: nodePath,
-        newPath: nextPath,
-      });
       sendJson(response, 200, {
         ok: true,
         node: await context.getProjectNode(nextPath),
@@ -201,11 +228,6 @@ async function routeRequest(
 
     if (body.data && typeof body.data === "object" && typeof (body.data as Record<string, unknown>).className === "string") {
       await context.upsertProjectNode(nodePath, body.data as never);
-      await context.refreshProjectState();
-      context.broadcastToClients("studio", {
-        type: "INSTANCE_CHANGED",
-        path: nodePath,
-      });
       sendJson(response, 200, {
         ok: true,
         node: await context.getProjectNode(nodePath),
@@ -219,11 +241,6 @@ async function routeRequest(
       attributes: body.attributes && typeof body.attributes === "object" ? (body.attributes as Record<string, unknown>) : undefined,
       tags: Array.isArray(body.tags) ? body.tags.filter((entry): entry is string => typeof entry === "string") : undefined,
       source: typeof body.source === "string" ? body.source : undefined,
-    });
-    await context.refreshProjectState();
-    context.broadcastToClients("studio", {
-      type: "INSTANCE_CHANGED",
-      path: nodePath,
     });
     sendJson(response, 200, {
       ok: true,
@@ -244,11 +261,6 @@ async function routeRequest(
     }
 
     await context.deleteProjectNode(nodePath);
-    await context.refreshProjectState();
-    context.broadcastToClients("studio", {
-      type: "INSTANCE_REMOVED",
-      path: nodePath,
-    });
     sendJson(response, 200, {
       ok: true,
       tree: await context.getProjectTree(),
@@ -259,10 +271,7 @@ async function routeRequest(
   if (request.method === "POST" && requestUrl.pathname === "/api/command/pull") {
     const body = await readJsonBody(request);
     const service = typeof body.service === "string" ? body.service : undefined;
-    const delivered = context.broadcastToClients("studio", {
-      type: "PULL_REQUEST",
-      service,
-    });
+    const delivered = context.requestPull(service);
     sendJson(response, 200, {
       ok: true,
       delivered,
@@ -275,10 +284,7 @@ async function routeRequest(
   if (request.method === "POST" && requestUrl.pathname === "/api/command/push") {
     const body = await readJsonBody(request);
     const service = typeof body.service === "string" ? body.service : undefined;
-    const delivered = context.broadcastToClients("studio", {
-      type: "PUSH_REQUEST",
-      service,
-    });
+    const delivered = context.pushToStudio(service);
     sendJson(response, 200, {
       ok: true,
       delivered,

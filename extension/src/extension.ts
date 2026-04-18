@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { DaemonClient, type ProjectTreeNode } from "./daemon/DaemonClient.js";
+import { DaemonClient, type ConnectionState, type ProjectTreeNode } from "./daemon/DaemonClient.js";
 import { ExplorerProvider } from "./explorer/ExplorerProvider.js";
 import { PropertiesProvider } from "./properties/PropertiesProvider.js";
 import { StatusProvider } from "./status/StatusProvider.js";
@@ -102,16 +102,38 @@ async function deleteInstance(daemonClient: DaemonClient, provider: ExplorerProv
   await provider.refresh();
 }
 
+function statusBarTextForState(state: ConnectionState): string {
+  switch (state) {
+    case "connected":
+      return "$(plug) RoSync Connected";
+    case "connecting":
+      return "$(sync~spin) RoSync Connecting";
+    case "reconnecting":
+      return "$(sync~spin) RoSync Reconnecting";
+    default:
+      return "$(debug-disconnect) RoSync Disconnected";
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const daemonClient = new DaemonClient();
   const explorerProvider = new ExplorerProvider(daemonClient);
   const propertiesProvider = new PropertiesProvider();
   const statusProvider = new StatusProvider(daemonClient);
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBarItem.text = statusBarTextForState("connecting");
+  statusBarItem.tooltip = "RoSync daemon connection status";
+  statusBarItem.command = "rosync.refreshExplorer";
+  statusBarItem.show();
   const explorerTreeView = vscode.window.createTreeView("rosync.explorer", {
     treeDataProvider: explorerProvider,
   });
 
   context.subscriptions.push(
+    daemonClient,
+    explorerProvider,
+    statusProvider,
+    statusBarItem,
     explorerTreeView,
     vscode.window.registerTreeDataProvider("rosync.properties", propertiesProvider),
     vscode.window.registerTreeDataProvider("rosync.status", statusProvider),
@@ -151,18 +173,22 @@ export function activate(context: vscode.ExtensionContext): void {
     propertiesProvider.setSelectedNode(explorerProvider.selectedData(event.selection[0]));
   });
 
-  const statusInterval = setInterval(() => {
-    void statusProvider.refresh();
-  }, 5000);
-  const explorerInterval = setInterval(() => {
-    void explorerProvider.refresh();
-  }, 5000);
-
   context.subscriptions.push(
-    new vscode.Disposable(() => clearInterval(statusInterval)),
-    new vscode.Disposable(() => clearInterval(explorerInterval)),
+    daemonClient.onDidReceiveEvent((event) => {
+      if (event.type === "CONNECTION_STATE") {
+        statusBarItem.text = statusBarTextForState(event.state);
+        statusBarItem.tooltip = event.endpoint ? `RoSync daemon: ${event.endpoint.host}:${event.endpoint.port}` : "RoSync daemon connection status";
+      } else if (event.type === "CONFLICT") {
+        void vscode.window.showWarningMessage(`RoSync conflict detected at ${event.conflict.path}`);
+      } else if (event.type === "ERROR") {
+        statusBarItem.text = "$(warning) RoSync Error";
+      }
+    }),
   );
 
+  void daemonClient.start().catch((error) => {
+    void vscode.window.showWarningMessage(`RoSync daemon connection failed: ${String((error as Error).message ?? error)}`);
+  });
   void explorerProvider.refresh();
   void statusProvider.refresh();
 }

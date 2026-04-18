@@ -3,24 +3,22 @@ import chokidar from "chokidar";
 import type { Command } from "commander";
 import { loadIgnoreRules } from "../config/ignore.js";
 import { ensureProjectDirectories, loadConfig } from "../config/toml_parser.js";
-import type { ProjectTreeSnapshot, RuntimeState } from "../config/types.js";
+import type { RuntimeState } from "../config/types.js";
 import { EMPTY_RUNTIME_STATE } from "../config/types.js";
 import { loadSchemaCache, schemaIsStale, updateSchemaCache } from "../schema/loader.js";
-import { attachWebSocketServer } from "../server/websocket.js";
 import { startHttpServer, stopHttpServer } from "../server/http.js";
 import { type ServerLogger } from "../server/types.js";
+import { attachWebSocketServer } from "../server/websocket.js";
 import { DebouncedTask } from "../sync/debounce.js";
-import { summarizeConnections, writeRuntimeState } from "../sync/engine.js";
+import { summarizeConnections, SyncEngine, writeRuntimeState } from "../sync/engine.js";
 import {
   buildProjectTree,
-  createNode,
-  deleteNode,
-  findNodeByPath,
-  moveNode,
-  renameNode,
-  summarizeProjectTree,
-  updateNode,
-  upsertNodeFromPayload,
+  createNode as createProjectNodeOnDisk,
+  deleteNode as deleteProjectNodeOnDisk,
+  moveNode as moveProjectNodeOnDisk,
+  renameNode as renameProjectNodeOnDisk,
+  updateNode as updateProjectNodeOnDisk,
+  upsertNodeFromPayload as upsertProjectNodeOnDisk,
 } from "../sync/project.js";
 
 const logger: ServerLogger = {
@@ -52,11 +50,11 @@ export function registerWatchCommand(program: Command): void {
 
       await ensureProjectDirectories(config);
       const ignoreRules = await loadIgnoreRules(config.projectRoot, config.ignorePath);
-
       let schemaCache = await loadSchemaCache(config);
-      if (config.sync.autoSchemaUpdate && schemaIsStale(schemaCache)) {
+
+      if (config.network.enabled && config.sync.autoSchemaUpdate && schemaIsStale(schemaCache)) {
         void updateSchemaCache(config)
-          .then((nextSchema) => {
+          .then(async (nextSchema) => {
             schemaCache = nextSchema;
             logger.info(`Schema cache refreshed in background (${schemaCache.metadata.version ?? "unknown"}).`);
           })
@@ -65,8 +63,20 @@ export function registerWatchCommand(program: Command): void {
           });
       }
 
-      let projectTree: ProjectTreeSnapshot = await buildProjectTree(config, ignoreRules);
-      let summary = summarizeProjectTree(projectTree);
+      let websocketRuntime: ReturnType<typeof attachWebSocketServer> | null = null;
+      const rebuildProjectTree = async () => buildProjectTree(config, ignoreRules);
+      const engine = new SyncEngine(await rebuildProjectTree(), {
+        rebuildProjectTree,
+        createProjectNode: (parentPath, name, className) => createProjectNodeOnDisk(config, parentPath, name, className),
+        updateProjectNode: (nodePath, patch) => updateProjectNodeOnDisk(config, nodePath, patch),
+        upsertProjectNode: (nodePath, payload) => upsertProjectNodeOnDisk(config, nodePath, payload),
+        renameProjectNode: (nodePath, newName) => renameProjectNodeOnDisk(config, nodePath, newName),
+        moveProjectNode: (oldPath, newPath) => moveProjectNodeOnDisk(config, oldPath, newPath),
+        deleteProjectNode: (nodePath) => deleteProjectNodeOnDisk(config, nodePath),
+        broadcastToClients: (role, payload) => websocketRuntime?.broadcastToRole(role, payload) ?? 0,
+        logger,
+      });
+
       let runtimeState: RuntimeState = {
         ...EMPTY_RUNTIME_STATE,
         running: true,
@@ -76,12 +86,9 @@ export function registerWatchCommand(program: Command): void {
         updatedAt: new Date().toISOString(),
         schemaVersion: schemaCache.metadata.version,
         schemaFetchedAt: schemaCache.metadata.fetchedAt,
-        summary,
+        summary: engine.getProjectSummary(),
+        diagnostics: engine.getDiagnostics(),
       };
-
-      let websocketRuntime:
-        | ReturnType<typeof attachWebSocketServer>
-        | null = null;
 
       const persistRuntimeState = async (): Promise<void> => {
         runtimeState = {
@@ -89,8 +96,9 @@ export function registerWatchCommand(program: Command): void {
           updatedAt: new Date().toISOString(),
           schemaVersion: schemaCache.metadata.version,
           schemaFetchedAt: schemaCache.metadata.fetchedAt,
-          summary,
           connections: summarizeConnections(websocketRuntime?.getSessionSummaries() ?? []),
+          summary: engine.getProjectSummary(),
+          diagnostics: engine.getDiagnostics(),
         };
         await writeRuntimeState(config, runtimeState);
       };
@@ -98,23 +106,62 @@ export function registerWatchCommand(program: Command): void {
       const httpServer = await startHttpServer({
         config,
         logger,
-        getSummary: () => summary,
+        getSummary: () => engine.getProjectSummary(),
+        getDiagnostics: () => engine.getDiagnostics(),
+        getRuntimeState: () => runtimeState,
         getConnections: () => runtimeState.connections,
+        getConflicts: () => engine.getConflicts(),
+        resolveConflict: async (id, strategy) => {
+          const resolved = await engine.resolveConflict(id, strategy);
+          await persistRuntimeState();
+          return resolved;
+        },
         getSchemaCache: () => schemaCache,
-        getProjectTree: () => projectTree,
-        getProjectNode: (nodePath) => findNodeByPath(projectTree, nodePath),
-        refreshProjectState: async () => {
-          projectTree = await buildProjectTree(config, ignoreRules);
-          summary = summarizeProjectTree(projectTree);
+        getProjectTree: () => engine.getProjectTree(),
+        getProjectNode: (nodePath) => engine.getProjectNode(nodePath),
+        refreshProjectState: async (origin = "disk") => {
+          await engine.reconcileDiskTree(origin);
           await persistRuntimeState();
         },
-        createProjectNode: (parentPath, name, className) => createNode(config, parentPath, name, className),
-        updateProjectNode: (nodePath, patch) => updateNode(config, nodePath, patch),
-        upsertProjectNode: (nodePath, payload) => upsertNodeFromPayload(config, nodePath, payload),
-        renameProjectNode: (nodePath, newName) => renameNode(config, nodePath, newName),
-        moveProjectNode: (oldPath, newPath) => moveNode(config, oldPath, newPath),
-        deleteProjectNode: (nodePath) => deleteNode(config, nodePath),
-        broadcastToClients: () => 0,
+        createProjectNode: async (parentPath, name, className) => {
+          await engine.createNode(parentPath, name, className, "editor");
+          await persistRuntimeState();
+        },
+        updateProjectNode: async (nodePath, patch) => {
+          await engine.updateNode(nodePath, patch, "editor");
+          await persistRuntimeState();
+        },
+        upsertProjectNode: async (nodePath, payload) => {
+          await engine.upsertNode(nodePath, payload, "editor");
+          await persistRuntimeState();
+        },
+        renameProjectNode: async (nodePath, newName) => {
+          await engine.renameNode(nodePath, newName, "editor");
+          await persistRuntimeState();
+        },
+        moveProjectNode: async (oldPath, newPath) => {
+          await engine.moveNode(oldPath, newPath, "editor");
+          await persistRuntimeState();
+        },
+        deleteProjectNode: async (nodePath) => {
+          await engine.deleteNode(nodePath, "editor");
+          await persistRuntimeState();
+        },
+        syncFromStudio: async (nodePath, payload) => {
+          await engine.handleStudioSync(nodePath, payload);
+          await persistRuntimeState();
+        },
+        removeFromStudio: async (nodePath) => {
+          await engine.handleStudioRemove(nodePath);
+          await persistRuntimeState();
+        },
+        renameFromStudio: async (oldPath, newPath) => {
+          await engine.handleStudioRename(oldPath, newPath);
+          await persistRuntimeState();
+        },
+        pushToStudio: (service) => engine.pushToStudio(service),
+        requestPull: (service) => engine.requestPull(service),
+        broadcastToClients: (role, payload) => websocketRuntime?.broadcastToRole(role, payload) ?? 0,
       });
 
       websocketRuntime = attachWebSocketServer(
@@ -122,34 +169,72 @@ export function registerWatchCommand(program: Command): void {
         {
           config,
           logger,
-          getSummary: () => summary,
+          getSummary: () => engine.getProjectSummary(),
+          getDiagnostics: () => engine.getDiagnostics(),
+          getRuntimeState: () => runtimeState,
           getConnections: () => runtimeState.connections,
+          getConflicts: () => engine.getConflicts(),
+          resolveConflict: async (id, strategy) => {
+            const resolved = await engine.resolveConflict(id, strategy);
+            await persistRuntimeState();
+            return resolved;
+          },
           getSchemaCache: () => schemaCache,
-          getProjectTree: () => projectTree,
-          getProjectNode: (nodePath) => findNodeByPath(projectTree, nodePath),
-          refreshProjectState: async () => {
-            projectTree = await buildProjectTree(config, ignoreRules);
-            summary = summarizeProjectTree(projectTree);
+          getProjectTree: () => engine.getProjectTree(),
+          getProjectNode: (nodePath) => engine.getProjectNode(nodePath),
+          refreshProjectState: async (origin = "disk") => {
+            await engine.reconcileDiskTree(origin);
             await persistRuntimeState();
           },
-          createProjectNode: (parentPath, name, className) => createNode(config, parentPath, name, className),
-          updateProjectNode: (nodePath, patch) => updateNode(config, nodePath, patch),
-          upsertProjectNode: (nodePath, payload) => upsertNodeFromPayload(config, nodePath, payload),
-          renameProjectNode: (nodePath, newName) => renameNode(config, nodePath, newName),
-          moveProjectNode: (oldPath, newPath) => moveNode(config, oldPath, newPath),
-          deleteProjectNode: (nodePath) => deleteNode(config, nodePath),
+          createProjectNode: async (parentPath, name, className) => {
+            await engine.createNode(parentPath, name, className, "editor");
+            await persistRuntimeState();
+          },
+          updateProjectNode: async (nodePath, patch) => {
+            await engine.updateNode(nodePath, patch, "editor");
+            await persistRuntimeState();
+          },
+          upsertProjectNode: async (nodePath, payload) => {
+            await engine.upsertNode(nodePath, payload, "editor");
+            await persistRuntimeState();
+          },
+          renameProjectNode: async (nodePath, newName) => {
+            await engine.renameNode(nodePath, newName, "editor");
+            await persistRuntimeState();
+          },
+          moveProjectNode: async (oldPath, newPath) => {
+            await engine.moveNode(oldPath, newPath, "editor");
+            await persistRuntimeState();
+          },
+          deleteProjectNode: async (nodePath) => {
+            await engine.deleteNode(nodePath, "editor");
+            await persistRuntimeState();
+          },
+          syncFromStudio: async (nodePath, payload) => {
+            await engine.handleStudioSync(nodePath, payload);
+            await persistRuntimeState();
+          },
+          removeFromStudio: async (nodePath) => {
+            await engine.handleStudioRemove(nodePath);
+            await persistRuntimeState();
+          },
+          renameFromStudio: async (oldPath, newPath) => {
+            await engine.handleStudioRename(oldPath, newPath);
+            await persistRuntimeState();
+          },
+          pushToStudio: (service) => engine.pushToStudio(service),
+          requestPull: (service) => engine.requestPull(service),
           broadcastToClients: (role, payload) => websocketRuntime?.broadcastToRole(role, payload) ?? 0,
         },
         persistRuntimeState,
       );
 
-      const refreshSummary = async (): Promise<void> => {
-        projectTree = await buildProjectTree(config, ignoreRules);
-        summary = summarizeProjectTree(projectTree);
+      const refreshFromWatcher = async (): Promise<void> => {
+        await engine.reconcileDiskTree("disk");
         await persistRuntimeState();
       };
 
-      const debouncedRefresh = new DebouncedTask(config.sync.debounceMs, refreshSummary);
+      const debouncedRefresh = new DebouncedTask(config.sync.debounceMs, refreshFromWatcher);
       const watcher = chokidar.watch(config.srcDir, {
         ignoreInitial: true,
         persistent: true,
@@ -157,15 +242,10 @@ export function registerWatchCommand(program: Command): void {
 
       watcher.on("all", (eventName, changedPath) => {
         const relativePath = path.relative(config.projectRoot, changedPath).replace(/\\/g, "/");
+        engine.noteFileEvent(relativePath);
         if (options.verbose) {
           logger.info(`${eventName} ${relativePath}`);
         }
-
-        websocketRuntime?.broadcast({
-          type: "FILE_SYSTEM_CHANGED",
-          event: eventName,
-          path: relativePath,
-        });
         debouncedRefresh.trigger();
       });
 

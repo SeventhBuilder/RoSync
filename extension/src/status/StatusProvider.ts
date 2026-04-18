@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { DaemonClient, type DaemonHealth } from "../daemon/DaemonClient.js";
+import { type ConnectionState, DaemonClient, type DaemonHealth } from "../daemon/DaemonClient.js";
 
 class StatusItem extends vscode.TreeItem {
   public constructor(label: string, description?: string) {
@@ -8,13 +8,45 @@ class StatusItem extends vscode.TreeItem {
   }
 }
 
-export class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
+function formatTimestamp(value: string | null | undefined): string {
+  if (!value) {
+    return "n/a";
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
+}
+
+export class StatusProvider implements vscode.TreeDataProvider<StatusItem>, vscode.Disposable {
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<StatusItem | undefined>();
   public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
   private health: DaemonHealth | null = null;
   private error: string | null = null;
+  private connectionState: ConnectionState = "disconnected";
+  private readonly eventSubscription: vscode.Disposable;
 
-  public constructor(private readonly daemonClient: DaemonClient) {}
+  public constructor(private readonly daemonClient: DaemonClient) {
+    this.eventSubscription = this.daemonClient.onDidReceiveEvent((event) => {
+      if (event.type === "CONNECTION_STATE") {
+        this.connectionState = event.state;
+        if (event.state === "connected") {
+          void this.refresh();
+        } else {
+          this.onDidChangeTreeDataEmitter.fire(undefined);
+        }
+      } else if (event.type === "SYNC_INSTANCE" || event.type === "REMOVE_INSTANCE" || event.type === "RENAME_INSTANCE" || event.type === "CONFLICT") {
+        void this.refresh();
+      } else if (event.type === "ERROR") {
+        this.error = event.message;
+        this.onDidChangeTreeDataEmitter.fire(undefined);
+      }
+    });
+  }
+
+  public dispose(): void {
+    this.eventSubscription.dispose();
+    this.onDidChangeTreeDataEmitter.dispose();
+  }
 
   public async refresh(): Promise<void> {
     try {
@@ -33,28 +65,40 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem> {
   }
 
   public async getChildren(): Promise<StatusItem[]> {
-    if (!this.health && !this.error) {
+    if (!this.health && !this.error && this.connectionState !== "disconnected") {
       await this.refresh();
     }
 
     if (this.error) {
-      return [new StatusItem("Daemon disconnected", this.error)];
+      return [
+        new StatusItem("Connection", this.connectionState),
+        new StatusItem("Daemon", this.error),
+      ];
     }
 
     if (!this.health) {
-      return [new StatusItem("Loading daemon status...")];
+      return [new StatusItem("Connection", this.connectionState)];
     }
 
     return [
+      new StatusItem("Connection", this.connectionState),
       new StatusItem("Project", this.health.project),
       new StatusItem("Daemon", `${this.health.host}:${this.health.port}`),
+      new StatusItem("Synced", `${this.health.diagnostics.syncedInstances}`),
+      new StatusItem("Drifted", `${this.health.diagnostics.driftedInstances}`),
+      new StatusItem("Conflicts", `${this.health.diagnostics.conflictCount}`),
+      new StatusItem("Pending outbound", `${this.health.diagnostics.pendingOutboundCount}`),
       new StatusItem("Indexed instances", `${this.health.summary.indexedInstances}`),
       new StatusItem("Script files", `${this.health.summary.scriptFiles}`),
       new StatusItem("Ignored entries", `${this.health.summary.ignoredEntries}`),
       new StatusItem("Studio clients", `${this.health.connections.studio}`),
       new StatusItem("Editor clients", `${this.health.connections.editor}`),
       new StatusItem("Schema version", this.health.schema.version ?? "unknown"),
-      new StatusItem("Schema fetched", this.health.schema.fetchedAt),
+      new StatusItem("Last file event", `${formatTimestamp(this.health.diagnostics.lastFileEventAt)} (${this.health.diagnostics.lastFileEventPath ?? "n/a"})`),
+      new StatusItem(
+        "Last Studio event",
+        `${formatTimestamp(this.health.diagnostics.lastStudioEventAt)} (${this.health.diagnostics.lastStudioEventPath ?? "n/a"})`,
+      ),
     ];
   }
 }

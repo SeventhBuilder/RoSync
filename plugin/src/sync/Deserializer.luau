@@ -180,6 +180,35 @@ local function decodeValue(rawValue)
 		)
 	end
 
+	if encodedType == "Axes" and type(encodedValue) == "table" then
+		local axes = {}
+		for _, axisName in ipairs(encodedValue) do
+			if axisName == "X" then
+				table.insert(axes, Enum.Axis.X)
+			elseif axisName == "Y" then
+				table.insert(axes, Enum.Axis.Y)
+			elseif axisName == "Z" then
+				table.insert(axes, Enum.Axis.Z)
+			end
+		end
+		if #axes > 0 then
+			return Axes.new(unpack(axes))
+		end
+	end
+
+	if encodedType == "Faces" and type(encodedValue) == "table" then
+		local faces = {}
+		for _, faceName in ipairs(encodedValue) do
+			local normalId = Enum.NormalId[faceName]
+			if normalId then
+				table.insert(faces, normalId)
+			end
+		end
+		if #faces > 0 then
+			return Faces.new(unpack(faces))
+		end
+	end
+
 	if encodedType == "NumberSequence" and type(encodedValue) == "table" then
 		local keypoints = {}
 		for _, keypoint in ipairs(encodedValue) do
@@ -391,6 +420,13 @@ local function applyServiceNode(serviceNode)
 		return false, "Missing service " .. tostring(serviceNode.name)
 	end
 
+	pcall(function()
+		service:SetAttribute(MANAGED_ATTRIBUTE, true)
+	end)
+	applyAttributesExact(service, serviceNode.attributes)
+	applyTagsExact(service, serviceNode.tags)
+	applyProperties(service, serviceNode)
+
 	local matchedChildren = {}
 	for _, childNode in ipairs(serviceNode.children or {}) do
 		local childInstance = findCandidateChild(service, childNode)
@@ -410,6 +446,185 @@ local function applyServiceNode(serviceNode)
 				child:Destroy()
 			end)
 		end
+	end
+
+	return true
+end
+
+local function splitPath(pathValue)
+	local segments = {}
+	if type(pathValue) ~= "string" or pathValue == "" then
+		return segments
+	end
+
+	for _, segment in ipairs(string.split(pathValue, "/")) do
+		if segment ~= "" then
+			table.insert(segments, segment)
+		end
+	end
+
+	return segments
+end
+
+local function findInstanceByPath(pathValue)
+	local segments = splitPath(pathValue)
+	if #segments == 0 then
+		return nil
+	end
+
+	local current = getServiceRoot(segments[1])
+	if not current then
+		return nil
+	end
+
+	for index = 2, #segments do
+		current = current:FindFirstChild(segments[index])
+		if not current then
+			return nil
+		end
+	end
+
+	return current
+end
+
+local function ensureParentForPath(pathValue)
+	local segments = splitPath(pathValue)
+	if #segments <= 1 then
+		return nil, "Expected an instance path below a service."
+	end
+
+	local current = getServiceRoot(segments[1])
+	if not current then
+		return nil, "Missing service " .. tostring(segments[1])
+	end
+
+	for index = 2, #segments - 1 do
+		local segment = segments[index]
+		local child = current:FindFirstChild(segment)
+		if not child then
+			child = Instance.new("Folder")
+			child.Name = segment
+			pcall(function()
+				child:SetAttribute(MANAGED_ATTRIBUTE, true)
+			end)
+			child.Parent = current
+		end
+		current = child
+	end
+
+	return current
+end
+
+function Deserializer.applySyncInstance(pathValue, node)
+	if type(pathValue) ~= "string" or type(node) ~= "table" then
+		return false, "Expected path and node."
+	end
+
+	local segments = splitPath(pathValue)
+	if #segments == 0 then
+		return false, "Expected a Roblox path."
+	end
+
+	ChangeHistoryService:SetWaypoint("Before RoSync Sync Instance")
+
+	if #segments == 1 then
+		local success, result = applyServiceNode({
+			name = segments[1],
+			className = node.className or segments[1],
+			properties = node.properties or {},
+			attributes = node.attributes or {},
+			tags = node.tags or {},
+			source = node.source,
+			children = node.children or {},
+		})
+		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
+		return success, result
+	end
+
+	local parent, parentError = ensureParentForPath(pathValue)
+	if not parent then
+		return false, parentError
+	end
+
+	local childNode = {
+		name = segments[#segments],
+		className = node.className or "Folder",
+		properties = node.properties or {},
+		attributes = node.attributes or {},
+		tags = node.tags or {},
+		source = node.source,
+		children = node.children or {},
+	}
+
+	local instance = findCandidateChild(parent, childNode)
+	if not instance then
+		instance = createInstanceForNode(childNode)
+		instance.Name = childNode.name
+		instance.Parent = parent
+	end
+
+	applyNode(instance, childNode)
+	ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
+	return true
+end
+
+function Deserializer.removeAtPath(pathValue)
+	local instance = findInstanceByPath(pathValue)
+	if not instance then
+		return false, "Instance not found at " .. tostring(pathValue)
+	end
+
+	if instance == game then
+		return false, "Cannot remove the DataModel root."
+	end
+
+	ChangeHistoryService:SetWaypoint("Before RoSync Remove")
+	local success, removeError = pcall(function()
+		instance:Destroy()
+	end)
+	ChangeHistoryService:SetWaypoint("After RoSync Remove")
+
+	if not success then
+		return false, tostring(removeError)
+	end
+
+	return true
+end
+
+function Deserializer.renameAtPath(oldPath, newPath)
+	local instance = findInstanceByPath(oldPath)
+	if not instance then
+		return false, "Instance not found at " .. tostring(oldPath)
+	end
+
+	local segments = splitPath(newPath)
+	if #segments == 0 then
+		return false, "Expected a destination Roblox path."
+	end
+
+	local nextParent = nil
+	if #segments > 1 then
+		local parent, parentError = ensureParentForPath(newPath)
+		if not parent then
+			return false, parentError
+		end
+		nextParent = parent
+	end
+
+	ChangeHistoryService:SetWaypoint("Before RoSync Rename")
+
+	local success, renameError = pcall(function()
+		if nextParent then
+			instance.Parent = nextParent
+		end
+		instance.Name = segments[#segments]
+		instance:SetAttribute(MANAGED_ATTRIBUTE, true)
+	end)
+
+	ChangeHistoryService:SetWaypoint("After RoSync Rename")
+
+	if not success then
+		return false, tostring(renameError)
 	end
 
 	return true

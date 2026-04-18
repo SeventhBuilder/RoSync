@@ -12,6 +12,10 @@ export interface SyncSection {
   debounceMs: number;
 }
 
+export interface NetworkSection {
+  enabled: boolean;
+}
+
 export interface GitSection {
   enabled: boolean;
   autoCommit: boolean;
@@ -43,6 +47,7 @@ export interface IgnoreSection {
 export interface RoSyncConfig {
   project: ProjectSection;
   sync: SyncSection;
+  network: NetworkSection;
   git: GitSection;
   places: PlacesSection;
   team: TeamSection;
@@ -71,6 +76,19 @@ export interface RuntimeStatusSummary {
   ignoredEntries: number;
   classCounts: Record<string, number>;
   lastScanAt: string;
+}
+
+export interface RuntimeDiagnostics {
+  syncedInstances: number;
+  driftedInstances: number;
+  conflictCount: number;
+  pendingOutboundCount: number;
+  lastFileEventAt: string | null;
+  lastFileEventPath: string | null;
+  lastStudioEventAt: string | null;
+  lastStudioEventPath: string | null;
+  lastEditorEventAt: string | null;
+  lastEditorEventPath: string | null;
 }
 
 export interface ProjectTreeNode {
@@ -117,6 +135,7 @@ export interface RuntimeState {
   schemaFetchedAt: string | null;
   connections: RuntimeConnections;
   summary: RuntimeStatusSummary;
+  diagnostics: RuntimeDiagnostics;
 }
 
 export const DEFAULT_SERVICES = [
@@ -146,6 +165,9 @@ export const DEFAULT_CONFIG: RoSyncConfig = {
     src: "src",
     autoSchemaUpdate: true,
     debounceMs: 150,
+  },
+  network: {
+    enabled: true,
   },
   git: {
     enabled: true,
@@ -181,6 +203,19 @@ export const EMPTY_RUNTIME_SUMMARY: RuntimeStatusSummary = {
   lastScanAt: new Date(0).toISOString(),
 };
 
+export const EMPTY_RUNTIME_DIAGNOSTICS: RuntimeDiagnostics = {
+  syncedInstances: 0,
+  driftedInstances: 0,
+  conflictCount: 0,
+  pendingOutboundCount: 0,
+  lastFileEventAt: null,
+  lastFileEventPath: null,
+  lastStudioEventAt: null,
+  lastStudioEventPath: null,
+  lastEditorEventAt: null,
+  lastEditorEventPath: null,
+};
+
 export const EMPTY_RUNTIME_STATE: RuntimeState = {
   running: false,
   host: DEFAULT_CONFIG.sync.host,
@@ -195,4 +230,5 @@ export const EMPTY_RUNTIME_STATE: RuntimeState = {
     unknown: 0,
   },
   summary: EMPTY_RUNTIME_SUMMARY,
+  diagnostics: EMPTY_RUNTIME_DIAGNOSTICS,
 };

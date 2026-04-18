@@ -231,6 +231,12 @@ __modules['main.client'] = function(moduleRequire, script)
 	local applyInProgress = false
 	local refreshInFlight = false
 	local refreshQueued = false
+	local desiredConnection = false
+	local reconnectAttempt = 0
+	local reconnectThread = nil
+	local pollingThread = nil
+	local connectSocket
+	local pushServices
 	
 	local function appendLog(message)
 		if logBox.Text == "" then
@@ -251,6 +257,20 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 	local function appendConnectionHint()
 		appendLog("Tip: run `rosync watch` first, then use http://127.0.0.1:34872 or the exact host/port printed by the daemon.")
+	end
+	
+	local function stopPolling()
+		if pollingThread then
+			task.cancel(pollingThread)
+			pollingThread = nil
+		end
+	end
+	
+	local function cancelReconnect()
+		if reconnectThread then
+			task.cancel(reconnectThread)
+			reconnectThread = nil
+		end
 	end
 	
 	local function refreshSelection()
@@ -314,6 +334,37 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	end
 	
+	local function startPolling(reason)
+		if pollingThread then
+			return
+		end
+	
+		appendLog("HTTP polling active (" .. tostring(reason) .. ").")
+		pollingThread = task.spawn(function()
+			while desiredConnection and (not socketClient or not socketClient:isConnected()) do
+				fetchAndApplyTree("poll")
+				task.wait(2)
+			end
+			pollingThread = nil
+		end)
+	end
+	
+	local function scheduleReconnect()
+		if not desiredConnection or reconnectThread then
+			return
+		end
+	
+		local delaySeconds = math.min(30, 2 ^ reconnectAttempt)
+		reconnectAttempt += 1
+		appendLog("Scheduling reconnect in " .. tostring(delaySeconds) .. "s.")
+		reconnectThread = task.delay(delaySeconds, function()
+			reconnectThread = nil
+			if desiredConnection then
+				connectSocket(true)
+			end
+		end)
+	end
+	
 	local function handleSocketMessage(message)
 		appendLog("WS <- " .. message)
 	
@@ -326,6 +377,8 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		if payload.type == "WELCOME" then
+			reconnectAttempt = 0
+			stopPolling()
 			appendLog("Daemon handshake complete.")
 			fetchAndApplyTree("welcome")
 			return
@@ -354,6 +407,45 @@ __modules['main.client'] = function(moduleRequire, script)
 			return
 		end
 	
+		if payload.type == "SYNC_INSTANCE" and type(payload.path) == "string" and type(payload.data) == "table" then
+			applyInProgress = true
+			local applied, applyError = Deserializer.applySyncInstance(payload.path, payload.data)
+			applyInProgress = false
+	
+			if applied then
+				appendLog("Applied sync for " .. payload.path)
+			else
+				appendLog("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError))
+			end
+			return
+		end
+	
+		if payload.type == "REMOVE_INSTANCE" and type(payload.path) == "string" then
+			applyInProgress = true
+			local removed, removeError = Deserializer.removeAtPath(payload.path)
+			applyInProgress = false
+	
+			if removed then
+				appendLog("Removed " .. payload.path)
+			else
+				appendLog("Remove failed for " .. payload.path .. ": " .. tostring(removeError))
+			end
+			return
+		end
+	
+		if payload.type == "RENAME_INSTANCE" and type(payload.oldPath) == "string" and type(payload.newPath) == "string" then
+			applyInProgress = true
+			local renamed, renameError = Deserializer.renameAtPath(payload.oldPath, payload.newPath)
+			applyInProgress = false
+	
+			if renamed then
+				appendLog("Renamed " .. payload.oldPath .. " -> " .. payload.newPath)
+			else
+				appendLog("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError))
+			end
+			return
+		end
+	
 		if payload.type == "FILE_SYSTEM_CHANGED"
 			or payload.type == "INSTANCE_ADDED"
 			or payload.type == "INSTANCE_CHANGED"
@@ -363,17 +455,36 @@ __modules['main.client'] = function(moduleRequire, script)
 			return
 		end
 	
+		if payload.type == "CONFLICT" then
+			setStatus("Conflict", Color3.fromRGB(242, 186, 82))
+			appendLog("Conflict: " .. tostring(payload.reason or payload.path))
+			return
+		end
+	
 		if payload.type == "ERROR" then
 			appendLog("Daemon error: " .. tostring(payload.message))
 		end
 	end
 	
-	local function connectSocket()
+	connectSocket = function(isReconnect)
 		httpClient:setBaseUrl(currentServerUrl())
+		cancelReconnect()
 	
 		socketClient = WebSocketClient.new(currentServerUrl(), {
 			onMessage = handleSocketMessage,
 			onClose = function()
+				if socketClient then
+					socketClient:close()
+					socketClient = nil
+				end
+				if desiredConnection then
+					setStatus("Polling", Color3.fromRGB(242, 186, 82))
+					appendLog("WebSocket closed. Falling back to HTTP polling.")
+					startPolling("socket-closed")
+					scheduleReconnect()
+					return
+				end
+				stopPolling()
 				setStatus("Disconnected", Color3.fromRGB(227, 95, 95))
 				appendLog("WebSocket closed.")
 			end,
@@ -381,12 +492,16 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		local connected, errorMessage = socketClient:connect()
 		if not connected then
+			socketClient = nil
 			appendLog("WebSocket connect failed: " .. tostring(errorMessage))
 			appendConnectionHint()
-			setStatus("Disconnected", Color3.fromRGB(227, 95, 95))
+			setStatus("Polling", Color3.fromRGB(242, 186, 82))
+			startPolling(isReconnect and "reconnect-fallback" or "initial-fallback")
+			scheduleReconnect()
 			return false
 		end
 	
+		stopPolling()
 		sendMessage({
 			type = "HELLO",
 			version = "0.1.0",
@@ -399,16 +514,16 @@ __modules['main.client'] = function(moduleRequire, script)
 		return true
 	end
 	
-	local function pushInstance(instance, eventType)
+	local function pushInstance(instance)
 		local serialized = Serializer.serializeInstance(instance, true)
 		sendMessage({
-			type = eventType,
+			type = "SYNC_INSTANCE",
 			path = PathUtil.getInstancePath(instance),
 			data = serialized,
 		})
 	end
 	
-	local function pushServices()
+	pushServices = function()
 		local pushedCount = 0
 	
 		for _, serviceName in ipairs(SERVICE_NAMES) do
@@ -417,7 +532,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			end)
 	
 			if success and service then
-				pushInstance(service, "INSTANCE_CHANGED")
+				pushInstance(service)
 				pushedCount += 1
 			end
 		end
@@ -435,17 +550,26 @@ __modules['main.client'] = function(moduleRequire, script)
 			return instance ~= nil and instance ~= game and not applyInProgress
 		end, {
 			onAdded = function(instance)
-				pushInstance(instance, "INSTANCE_ADDED")
+				pushInstance(instance)
 			end,
 			onChanged = function(instance)
-				pushInstance(instance, "INSTANCE_CHANGED")
+				pushInstance(instance)
 			end,
-			onRemoving = function(instance)
+			onRenamed = function(_, oldPath, newPath)
 				sendMessage({
-					type = "INSTANCE_REMOVED",
-					path = PathUtil.getInstancePath(instance),
+					type = "RENAME_INSTANCE",
+					oldPath = oldPath,
+					newPath = newPath,
 				})
 			end,
+			onRemoving = function(_, previousPath)
+				sendMessage({
+					type = "REMOVE_INSTANCE",
+					path = previousPath,
+				})
+			end,
+		}, {
+			debounceSeconds = 0.15,
 		})
 	
 		appendLog("Studio watch started.")
@@ -461,15 +585,18 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 	buttons.Connect.MouseButton1Click:Connect(function()
 		httpClient:setBaseUrl(currentServerUrl())
+		desiredConnection = true
 		local success, response = httpClient:getHealth()
 		if success then
 			setStatus("Connected", Color3.fromRGB(126, 214, 149))
 			appendLog("HTTP health OK: " .. HttpService:JSONEncode(response))
-			connectSocket()
+			connectSocket(false)
 		else
-			setStatus("Disconnected", Color3.fromRGB(227, 95, 95))
+			setStatus("Polling", Color3.fromRGB(242, 186, 82))
 			appendLog("HTTP health failed: " .. tostring(response))
 			appendConnectionHint()
+			startPolling("health-check")
+			scheduleReconnect()
 		end
 	end)
 	
@@ -488,7 +615,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	buttons["Push Selection"].MouseButton1Click:Connect(function()
 		local selected = refreshSelection()
 		if selected then
-			pushInstance(selected, "INSTANCE_CHANGED")
+			pushInstance(selected)
 		end
 	end)
 	
@@ -508,6 +635,9 @@ __modules['main.client'] = function(moduleRequire, script)
 	end)
 	
 	buttons.Disconnect.MouseButton1Click:Connect(function()
+		desiredConnection = false
+		cancelReconnect()
+		stopPolling()
 		stopWatch()
 		if socketClient then
 			socketClient:close()
@@ -710,13 +840,32 @@ end
 
 __modules['sync/Listener'] = function(moduleRequire, script)
 	local require = moduleRequire
-	local Listener = {}
+	local PathUtil = require(script.Parent.Parent.util.PathUtil)
 	
-	function Listener.attach(shouldSync, callbacks)
+	local Listener = {}
+	local DEFAULT_DEBOUNCE_SECONDS = 0.15
+	
+	function Listener.attach(shouldSync, callbacks, options)
 		local connections = {}
 		local changedConnections = {}
+		local lastKnownPaths = {}
+		local pendingThreads = {}
+	
+		local debounceSeconds = DEFAULT_DEBOUNCE_SECONDS
+		if type(options) == "table" and type(options.debounceSeconds) == "number" then
+			debounceSeconds = options.debounceSeconds
+		end
+	
+		local function cancelPending(instance)
+			local thread = pendingThreads[instance]
+			if thread then
+				task.cancel(thread)
+				pendingThreads[instance] = nil
+			end
+		end
 	
 		local function disconnectChanged(instance)
+			cancelPending(instance)
 			local existing = changedConnections[instance]
 			if existing then
 				existing:Disconnect()
@@ -724,23 +873,46 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			end
 		end
 	
+		local function scheduleChanged(instance)
+			cancelPending(instance)
+	
+			pendingThreads[instance] = task.delay(debounceSeconds, function()
+				pendingThreads[instance] = nil
+				if not shouldSync(instance) then
+					return
+				end
+	
+				local previousPath = lastKnownPaths[instance]
+				local currentPath = PathUtil.getInstancePath(instance)
+	
+				if previousPath and currentPath ~= previousPath and callbacks.onRenamed then
+					callbacks.onRenamed(instance, previousPath, currentPath)
+				elseif callbacks.onChanged then
+					callbacks.onChanged(instance)
+				end
+	
+				lastKnownPaths[instance] = currentPath
+			end)
+		end
+	
 		local function watchInstance(instance)
 			if changedConnections[instance] then
 				return
 			end
 	
+			lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
 			changedConnections[instance] = instance.Changed:Connect(function()
-				if shouldSync(instance) and callbacks.onChanged then
-					callbacks.onChanged(instance)
-				end
+				scheduleChanged(instance)
 			end)
 		end
 	
 		local function unwatchInstance(instance)
 			disconnectChanged(instance)
+			lastKnownPaths[instance] = nil
 		end
 	
 		local function onAdded(instance)
+			lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
 			if shouldSync(instance) and callbacks.onAdded then
 				callbacks.onAdded(instance)
 			end
@@ -748,8 +920,9 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 		end
 	
 		local function onRemoving(instance)
+			local previousPath = lastKnownPaths[instance] or PathUtil.getInstancePath(instance)
 			if shouldSync(instance) and callbacks.onRemoving then
-				callbacks.onRemoving(instance)
+				callbacks.onRemoving(instance, previousPath)
 			end
 			unwatchInstance(instance)
 		end
@@ -768,6 +941,13 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			for instance, connection in pairs(changedConnections) do
 				connection:Disconnect()
 				changedConnections[instance] = nil
+			end
+			for instance, pendingThread in pairs(pendingThreads) do
+				task.cancel(pendingThread)
+				pendingThreads[instance] = nil
+			end
+			for instance in pairs(lastKnownPaths) do
+				lastKnownPaths[instance] = nil
 			end
 		end
 	end
@@ -795,6 +975,20 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 	
 		if valueType == "number" or valueType == "string" or valueType == "boolean" then
 			return value
+		end
+	
+		if valueType == "Content" then
+			return {
+				type = "Content",
+				value = tostring(value),
+			}
+		end
+	
+		if valueType == "BinaryString" then
+			return {
+				type = "BinaryString",
+				value = tostring(value),
+			}
 		end
 	
 		if valueType == "Instance" then
@@ -856,6 +1050,49 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 					value.FrictionWeight,
 					value.ElasticityWeight,
 				},
+			}
+		end
+	
+		if valueType == "Axes" then
+			local axes = {}
+			if value.X then
+				table.insert(axes, "X")
+			end
+			if value.Y then
+				table.insert(axes, "Y")
+			end
+			if value.Z then
+				table.insert(axes, "Z")
+			end
+			return {
+				type = "Axes",
+				value = axes,
+			}
+		end
+	
+		if valueType == "Faces" then
+			local faces = {}
+			if value.Top then
+				table.insert(faces, "Top")
+			end
+			if value.Bottom then
+				table.insert(faces, "Bottom")
+			end
+			if value.Left then
+				table.insert(faces, "Left")
+			end
+			if value.Right then
+				table.insert(faces, "Right")
+			end
+			if value.Back then
+				table.insert(faces, "Back")
+			end
+			if value.Front then
+				table.insert(faces, "Front")
+			end
+			return {
+				type = "Faces",
+				value = faces,
 			}
 		end
 	
@@ -1197,6 +1434,35 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			)
 		end
 	
+		if encodedType == "Axes" and type(encodedValue) == "table" then
+			local axes = {}
+			for _, axisName in ipairs(encodedValue) do
+				if axisName == "X" then
+					table.insert(axes, Enum.Axis.X)
+				elseif axisName == "Y" then
+					table.insert(axes, Enum.Axis.Y)
+				elseif axisName == "Z" then
+					table.insert(axes, Enum.Axis.Z)
+				end
+			end
+			if #axes > 0 then
+				return Axes.new(unpack(axes))
+			end
+		end
+	
+		if encodedType == "Faces" and type(encodedValue) == "table" then
+			local faces = {}
+			for _, faceName in ipairs(encodedValue) do
+				local normalId = Enum.NormalId[faceName]
+				if normalId then
+					table.insert(faces, normalId)
+				end
+			end
+			if #faces > 0 then
+				return Faces.new(unpack(faces))
+			end
+		end
+	
 		if encodedType == "NumberSequence" and type(encodedValue) == "table" then
 			local keypoints = {}
 			for _, keypoint in ipairs(encodedValue) do
@@ -1408,6 +1674,13 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			return false, "Missing service " .. tostring(serviceNode.name)
 		end
 	
+		pcall(function()
+			service:SetAttribute(MANAGED_ATTRIBUTE, true)
+		end)
+		applyAttributesExact(service, serviceNode.attributes)
+		applyTagsExact(service, serviceNode.tags)
+		applyProperties(service, serviceNode)
+	
 		local matchedChildren = {}
 		for _, childNode in ipairs(serviceNode.children or {}) do
 			local childInstance = findCandidateChild(service, childNode)
@@ -1427,6 +1700,185 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 					child:Destroy()
 				end)
 			end
+		end
+	
+		return true
+	end
+	
+	local function splitPath(pathValue)
+		local segments = {}
+		if type(pathValue) ~= "string" or pathValue == "" then
+			return segments
+		end
+	
+		for _, segment in ipairs(string.split(pathValue, "/")) do
+			if segment ~= "" then
+				table.insert(segments, segment)
+			end
+		end
+	
+		return segments
+	end
+	
+	local function findInstanceByPath(pathValue)
+		local segments = splitPath(pathValue)
+		if #segments == 0 then
+			return nil
+		end
+	
+		local current = getServiceRoot(segments[1])
+		if not current then
+			return nil
+		end
+	
+		for index = 2, #segments do
+			current = current:FindFirstChild(segments[index])
+			if not current then
+				return nil
+			end
+		end
+	
+		return current
+	end
+	
+	local function ensureParentForPath(pathValue)
+		local segments = splitPath(pathValue)
+		if #segments <= 1 then
+			return nil, "Expected an instance path below a service."
+		end
+	
+		local current = getServiceRoot(segments[1])
+		if not current then
+			return nil, "Missing service " .. tostring(segments[1])
+		end
+	
+		for index = 2, #segments - 1 do
+			local segment = segments[index]
+			local child = current:FindFirstChild(segment)
+			if not child then
+				child = Instance.new("Folder")
+				child.Name = segment
+				pcall(function()
+					child:SetAttribute(MANAGED_ATTRIBUTE, true)
+				end)
+				child.Parent = current
+			end
+			current = child
+		end
+	
+		return current
+	end
+	
+	function Deserializer.applySyncInstance(pathValue, node)
+		if type(pathValue) ~= "string" or type(node) ~= "table" then
+			return false, "Expected path and node."
+		end
+	
+		local segments = splitPath(pathValue)
+		if #segments == 0 then
+			return false, "Expected a Roblox path."
+		end
+	
+		ChangeHistoryService:SetWaypoint("Before RoSync Sync Instance")
+	
+		if #segments == 1 then
+			local success, result = applyServiceNode({
+				name = segments[1],
+				className = node.className or segments[1],
+				properties = node.properties or {},
+				attributes = node.attributes or {},
+				tags = node.tags or {},
+				source = node.source,
+				children = node.children or {},
+			})
+			ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
+			return success, result
+		end
+	
+		local parent, parentError = ensureParentForPath(pathValue)
+		if not parent then
+			return false, parentError
+		end
+	
+		local childNode = {
+			name = segments[#segments],
+			className = node.className or "Folder",
+			properties = node.properties or {},
+			attributes = node.attributes or {},
+			tags = node.tags or {},
+			source = node.source,
+			children = node.children or {},
+		}
+	
+		local instance = findCandidateChild(parent, childNode)
+		if not instance then
+			instance = createInstanceForNode(childNode)
+			instance.Name = childNode.name
+			instance.Parent = parent
+		end
+	
+		applyNode(instance, childNode)
+		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
+		return true
+	end
+	
+	function Deserializer.removeAtPath(pathValue)
+		local instance = findInstanceByPath(pathValue)
+		if not instance then
+			return false, "Instance not found at " .. tostring(pathValue)
+		end
+	
+		if instance == game then
+			return false, "Cannot remove the DataModel root."
+		end
+	
+		ChangeHistoryService:SetWaypoint("Before RoSync Remove")
+		local success, removeError = pcall(function()
+			instance:Destroy()
+		end)
+		ChangeHistoryService:SetWaypoint("After RoSync Remove")
+	
+		if not success then
+			return false, tostring(removeError)
+		end
+	
+		return true
+	end
+	
+	function Deserializer.renameAtPath(oldPath, newPath)
+		local instance = findInstanceByPath(oldPath)
+		if not instance then
+			return false, "Instance not found at " .. tostring(oldPath)
+		end
+	
+		local segments = splitPath(newPath)
+		if #segments == 0 then
+			return false, "Expected a destination Roblox path."
+		end
+	
+		local nextParent = nil
+		if #segments > 1 then
+			local parent, parentError = ensureParentForPath(newPath)
+			if not parent then
+				return false, parentError
+			end
+			nextParent = parent
+		end
+	
+		ChangeHistoryService:SetWaypoint("Before RoSync Rename")
+	
+		local success, renameError = pcall(function()
+			if nextParent then
+				instance.Parent = nextParent
+			end
+			instance.Name = segments[#segments]
+			instance:SetAttribute(MANAGED_ATTRIBUTE, true)
+		end)
+	
+		ChangeHistoryService:SetWaypoint("After RoSync Rename")
+	
+		if not success then
+			return false, tostring(renameError)
 		end
 	
 		return true

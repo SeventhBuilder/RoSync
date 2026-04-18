@@ -15,6 +15,16 @@ interface HealthResponse {
     scriptFiles: number;
     ignoredEntries: number;
   };
+  diagnostics?: {
+    syncedInstances: number;
+    driftedInstances: number;
+    conflictCount: number;
+    pendingOutboundCount: number;
+    lastFileEventAt?: string | null;
+    lastFileEventPath?: string | null;
+    lastStudioEventAt?: string | null;
+    lastStudioEventPath?: string | null;
+  };
   schema?: {
     version?: string | null;
     fetchedAt?: string | null;
@@ -60,6 +70,7 @@ export function registerStatusCommand(program: Command): void {
       const connections = health?.connections ?? runtime.connections;
       const schemaVersion = health?.schema?.version ?? runtime.schemaVersion ?? "unknown";
       const schemaFetchedAt = health?.schema?.fetchedAt ?? runtime.schemaFetchedAt;
+      const diagnostics = health?.diagnostics ?? runtime.diagnostics;
 
       console.log(`Project:            ${config.project.name}`);
       console.log(`Config:             ${config.configPath}`);
@@ -67,12 +78,18 @@ export function registerStatusCommand(program: Command): void {
       console.log(`Indexed instances:  ${localSummary.indexedInstances}`);
       console.log(`Script files:       ${localSummary.scriptFiles}`);
       console.log(`Ignored entries:    ${localSummary.ignoredEntries}`);
+      console.log(`Synced instances:   ${diagnostics.syncedInstances}`);
+      console.log(`Drifted instances:  ${diagnostics.driftedInstances}`);
+      console.log(`Conflicts:          ${diagnostics.conflictCount}`);
+      console.log(`Pending outbound:   ${diagnostics.pendingOutboundCount}`);
       console.log(`Daemon:             ${health ? "connected" : "disconnected"}`);
       console.log(`Studio clients:     ${connections.studio}`);
       console.log(`Editor clients:     ${connections.editor}`);
       console.log(`Other clients:      ${connections.unknown}`);
       console.log(`Schema version:     ${schemaVersion}`);
       console.log(`Schema fetched at:  ${formatTimestamp(schemaFetchedAt)}`);
+      console.log(`Last file event:    ${formatTimestamp(diagnostics.lastFileEventAt)} (${diagnostics.lastFileEventPath ?? "n/a"})`);
+      console.log(`Last Studio event:  ${formatTimestamp(diagnostics.lastStudioEventAt)} (${diagnostics.lastStudioEventPath ?? "n/a"})`);
       console.log(`Last scan:          ${formatTimestamp(localSummary.lastScanAt)}`);
     });
 }

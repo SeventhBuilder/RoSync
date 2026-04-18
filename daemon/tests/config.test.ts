@@ -86,3 +86,26 @@ test("loadConfig rejects non-loopback hosts", async () => {
 
   await assert.rejects(() => loadConfig(tempDir), /only supports localhost hosts/i);
 });
+
+test("loadConfig reads the top-level network flag", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "rosync-config-"));
+  await fs.writeFile(
+    path.join(tempDir, "rosync.toml"),
+    [
+      "[project]",
+      'name = "TestGame"',
+      "",
+      "[sync]",
+      'host = "127.0.0.1"',
+      "port = 34872",
+      'src = "src"',
+      "",
+      "network = false",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const config = await loadConfig(tempDir);
+  assert.equal(config.network.enabled, false);
+});

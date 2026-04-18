@@ -186,6 +186,12 @@ local stopWatching = nil
 local applyInProgress = false
 local refreshInFlight = false
 local refreshQueued = false
+local desiredConnection = false
+local reconnectAttempt = 0
+local reconnectThread = nil
+local pollingThread = nil
+local connectSocket
+local pushServices
 
 local function appendLog(message)
 	if logBox.Text == "" then
@@ -206,6 +212,20 @@ end
 
 local function appendConnectionHint()
 	appendLog("Tip: run `rosync watch` first, then use http://127.0.0.1:34872 or the exact host/port printed by the daemon.")
+end
+
+local function stopPolling()
+	if pollingThread then
+		task.cancel(pollingThread)
+		pollingThread = nil
+	end
+end
+
+local function cancelReconnect()
+	if reconnectThread then
+		task.cancel(reconnectThread)
+		reconnectThread = nil
+	end
 end
 
 local function refreshSelection()
@@ -269,6 +289,37 @@ local function fetchAndApplyTree(reason)
 	end
 end
 
+local function startPolling(reason)
+	if pollingThread then
+		return
+	end
+
+	appendLog("HTTP polling active (" .. tostring(reason) .. ").")
+	pollingThread = task.spawn(function()
+		while desiredConnection and (not socketClient or not socketClient:isConnected()) do
+			fetchAndApplyTree("poll")
+			task.wait(2)
+		end
+		pollingThread = nil
+	end)
+end
+
+local function scheduleReconnect()
+	if not desiredConnection or reconnectThread then
+		return
+	end
+
+	local delaySeconds = math.min(30, 2 ^ reconnectAttempt)
+	reconnectAttempt += 1
+	appendLog("Scheduling reconnect in " .. tostring(delaySeconds) .. "s.")
+	reconnectThread = task.delay(delaySeconds, function()
+		reconnectThread = nil
+		if desiredConnection then
+			connectSocket(true)
+		end
+	end)
+end
+
 local function handleSocketMessage(message)
 	appendLog("WS <- " .. message)
 
@@ -281,6 +332,8 @@ local function handleSocketMessage(message)
 	end
 
 	if payload.type == "WELCOME" then
+		reconnectAttempt = 0
+		stopPolling()
 		appendLog("Daemon handshake complete.")
 		fetchAndApplyTree("welcome")
 		return
@@ -309,6 +362,45 @@ local function handleSocketMessage(message)
 		return
 	end
 
+	if payload.type == "SYNC_INSTANCE" and type(payload.path) == "string" and type(payload.data) == "table" then
+		applyInProgress = true
+		local applied, applyError = Deserializer.applySyncInstance(payload.path, payload.data)
+		applyInProgress = false
+
+		if applied then
+			appendLog("Applied sync for " .. payload.path)
+		else
+			appendLog("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError))
+		end
+		return
+	end
+
+	if payload.type == "REMOVE_INSTANCE" and type(payload.path) == "string" then
+		applyInProgress = true
+		local removed, removeError = Deserializer.removeAtPath(payload.path)
+		applyInProgress = false
+
+		if removed then
+			appendLog("Removed " .. payload.path)
+		else
+			appendLog("Remove failed for " .. payload.path .. ": " .. tostring(removeError))
+		end
+		return
+	end
+
+	if payload.type == "RENAME_INSTANCE" and type(payload.oldPath) == "string" and type(payload.newPath) == "string" then
+		applyInProgress = true
+		local renamed, renameError = Deserializer.renameAtPath(payload.oldPath, payload.newPath)
+		applyInProgress = false
+
+		if renamed then
+			appendLog("Renamed " .. payload.oldPath .. " -> " .. payload.newPath)
+		else
+			appendLog("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError))
+		end
+		return
+	end
+
 	if payload.type == "FILE_SYSTEM_CHANGED"
 		or payload.type == "INSTANCE_ADDED"
 		or payload.type == "INSTANCE_CHANGED"
@@ -318,17 +410,36 @@ local function handleSocketMessage(message)
 		return
 	end
 
+	if payload.type == "CONFLICT" then
+		setStatus("Conflict", Color3.fromRGB(242, 186, 82))
+		appendLog("Conflict: " .. tostring(payload.reason or payload.path))
+		return
+	end
+
 	if payload.type == "ERROR" then
 		appendLog("Daemon error: " .. tostring(payload.message))
 	end
 end
 
-local function connectSocket()
+connectSocket = function(isReconnect)
 	httpClient:setBaseUrl(currentServerUrl())
+	cancelReconnect()
 
 	socketClient = WebSocketClient.new(currentServerUrl(), {
 		onMessage = handleSocketMessage,
 		onClose = function()
+			if socketClient then
+				socketClient:close()
+				socketClient = nil
+			end
+			if desiredConnection then
+				setStatus("Polling", Color3.fromRGB(242, 186, 82))
+				appendLog("WebSocket closed. Falling back to HTTP polling.")
+				startPolling("socket-closed")
+				scheduleReconnect()
+				return
+			end
+			stopPolling()
 			setStatus("Disconnected", Color3.fromRGB(227, 95, 95))
 			appendLog("WebSocket closed.")
 		end,
@@ -336,12 +447,16 @@ local function connectSocket()
 
 	local connected, errorMessage = socketClient:connect()
 	if not connected then
+		socketClient = nil
 		appendLog("WebSocket connect failed: " .. tostring(errorMessage))
 		appendConnectionHint()
-		setStatus("Disconnected", Color3.fromRGB(227, 95, 95))
+		setStatus("Polling", Color3.fromRGB(242, 186, 82))
+		startPolling(isReconnect and "reconnect-fallback" or "initial-fallback")
+		scheduleReconnect()
 		return false
 	end
 
+	stopPolling()
 	sendMessage({
 		type = "HELLO",
 		version = "0.1.0",
@@ -354,16 +469,16 @@ local function connectSocket()
 	return true
 end
 
-local function pushInstance(instance, eventType)
+local function pushInstance(instance)
 	local serialized = Serializer.serializeInstance(instance, true)
 	sendMessage({
-		type = eventType,
+		type = "SYNC_INSTANCE",
 		path = PathUtil.getInstancePath(instance),
 		data = serialized,
 	})
 end
 
-local function pushServices()
+pushServices = function()
 	local pushedCount = 0
 
 	for _, serviceName in ipairs(SERVICE_NAMES) do
@@ -372,7 +487,7 @@ local function pushServices()
 		end)
 
 		if success and service then
-			pushInstance(service, "INSTANCE_CHANGED")
+			pushInstance(service)
 			pushedCount += 1
 		end
 	end
@@ -390,17 +505,26 @@ local function startWatch()
 		return instance ~= nil and instance ~= game and not applyInProgress
 	end, {
 		onAdded = function(instance)
-			pushInstance(instance, "INSTANCE_ADDED")
+			pushInstance(instance)
 		end,
 		onChanged = function(instance)
-			pushInstance(instance, "INSTANCE_CHANGED")
+			pushInstance(instance)
 		end,
-		onRemoving = function(instance)
+		onRenamed = function(_, oldPath, newPath)
 			sendMessage({
-				type = "INSTANCE_REMOVED",
-				path = PathUtil.getInstancePath(instance),
+				type = "RENAME_INSTANCE",
+				oldPath = oldPath,
+				newPath = newPath,
 			})
 		end,
+		onRemoving = function(_, previousPath)
+			sendMessage({
+				type = "REMOVE_INSTANCE",
+				path = previousPath,
+			})
+		end,
+	}, {
+		debounceSeconds = 0.15,
 	})
 
 	appendLog("Studio watch started.")
@@ -416,15 +540,18 @@ end
 
 buttons.Connect.MouseButton1Click:Connect(function()
 	httpClient:setBaseUrl(currentServerUrl())
+	desiredConnection = true
 	local success, response = httpClient:getHealth()
 	if success then
 		setStatus("Connected", Color3.fromRGB(126, 214, 149))
 		appendLog("HTTP health OK: " .. HttpService:JSONEncode(response))
-		connectSocket()
+		connectSocket(false)
 	else
-		setStatus("Disconnected", Color3.fromRGB(227, 95, 95))
+		setStatus("Polling", Color3.fromRGB(242, 186, 82))
 		appendLog("HTTP health failed: " .. tostring(response))
 		appendConnectionHint()
+		startPolling("health-check")
+		scheduleReconnect()
 	end
 end)
 
@@ -443,7 +570,7 @@ end)
 buttons["Push Selection"].MouseButton1Click:Connect(function()
 	local selected = refreshSelection()
 	if selected then
-		pushInstance(selected, "INSTANCE_CHANGED")
+		pushInstance(selected)
 	end
 end)
 
@@ -463,6 +590,9 @@ buttons.Refresh.MouseButton1Click:Connect(function()
 end)
 
 buttons.Disconnect.MouseButton1Click:Connect(function()
+	desiredConnection = false
+	cancelReconnect()
+	stopPolling()
 	stopWatch()
 	if socketClient then
 		socketClient:close()

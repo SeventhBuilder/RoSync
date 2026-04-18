@@ -1,10 +1,29 @@
-local Listener = {}
+local PathUtil = require(script.Parent.Parent.util.PathUtil)
 
-function Listener.attach(shouldSync, callbacks)
+local Listener = {}
+local DEFAULT_DEBOUNCE_SECONDS = 0.15
+
+function Listener.attach(shouldSync, callbacks, options)
 	local connections = {}
 	local changedConnections = {}
+	local lastKnownPaths = {}
+	local pendingThreads = {}
+
+	local debounceSeconds = DEFAULT_DEBOUNCE_SECONDS
+	if type(options) == "table" and type(options.debounceSeconds) == "number" then
+		debounceSeconds = options.debounceSeconds
+	end
+
+	local function cancelPending(instance)
+		local thread = pendingThreads[instance]
+		if thread then
+			task.cancel(thread)
+			pendingThreads[instance] = nil
+		end
+	end
 
 	local function disconnectChanged(instance)
+		cancelPending(instance)
 		local existing = changedConnections[instance]
 		if existing then
 			existing:Disconnect()
@@ -12,23 +31,46 @@ function Listener.attach(shouldSync, callbacks)
 		end
 	end
 
+	local function scheduleChanged(instance)
+		cancelPending(instance)
+
+		pendingThreads[instance] = task.delay(debounceSeconds, function()
+			pendingThreads[instance] = nil
+			if not shouldSync(instance) then
+				return
+			end
+
+			local previousPath = lastKnownPaths[instance]
+			local currentPath = PathUtil.getInstancePath(instance)
+
+			if previousPath and currentPath ~= previousPath and callbacks.onRenamed then
+				callbacks.onRenamed(instance, previousPath, currentPath)
+			elseif callbacks.onChanged then
+				callbacks.onChanged(instance)
+			end
+
+			lastKnownPaths[instance] = currentPath
+		end)
+	end
+
 	local function watchInstance(instance)
 		if changedConnections[instance] then
 			return
 		end
 
+		lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
 		changedConnections[instance] = instance.Changed:Connect(function()
-			if shouldSync(instance) and callbacks.onChanged then
-				callbacks.onChanged(instance)
-			end
+			scheduleChanged(instance)
 		end)
 	end
 
 	local function unwatchInstance(instance)
 		disconnectChanged(instance)
+		lastKnownPaths[instance] = nil
 	end
 
 	local function onAdded(instance)
+		lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
 		if shouldSync(instance) and callbacks.onAdded then
 			callbacks.onAdded(instance)
 		end
@@ -36,8 +78,9 @@ function Listener.attach(shouldSync, callbacks)
 	end
 
 	local function onRemoving(instance)
+		local previousPath = lastKnownPaths[instance] or PathUtil.getInstancePath(instance)
 		if shouldSync(instance) and callbacks.onRemoving then
-			callbacks.onRemoving(instance)
+			callbacks.onRemoving(instance, previousPath)
 		end
 		unwatchInstance(instance)
 	end
@@ -56,6 +99,13 @@ function Listener.attach(shouldSync, callbacks)
 		for instance, connection in pairs(changedConnections) do
 			connection:Disconnect()
 			changedConnections[instance] = nil
+		end
+		for instance, pendingThread in pairs(pendingThreads) do
+			task.cancel(pendingThread)
+			pendingThreads[instance] = nil
+		end
+		for instance in pairs(lastKnownPaths) do
+			lastKnownPaths[instance] = nil
 		end
 	end
 end

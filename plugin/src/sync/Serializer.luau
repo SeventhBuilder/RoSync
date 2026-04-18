@@ -17,6 +17,20 @@ local function encodeValue(value)
 		return value
 	end
 
+	if valueType == "Content" then
+		return {
+			type = "Content",
+			value = tostring(value),
+		}
+	end
+
+	if valueType == "BinaryString" then
+		return {
+			type = "BinaryString",
+			value = tostring(value),
+		}
+	end
+
 	if valueType == "Instance" then
 		return nil
 	end
@@ -76,6 +90,49 @@ local function encodeValue(value)
 				value.FrictionWeight,
 				value.ElasticityWeight,
 			},
+		}
+	end
+
+	if valueType == "Axes" then
+		local axes = {}
+		if value.X then
+			table.insert(axes, "X")
+		end
+		if value.Y then
+			table.insert(axes, "Y")
+		end
+		if value.Z then
+			table.insert(axes, "Z")
+		end
+		return {
+			type = "Axes",
+			value = axes,
+		}
+	end
+
+	if valueType == "Faces" then
+		local faces = {}
+		if value.Top then
+			table.insert(faces, "Top")
+		end
+		if value.Bottom then
+			table.insert(faces, "Bottom")
+		end
+		if value.Left then
+			table.insert(faces, "Left")
+		end
+		if value.Right then
+			table.insert(faces, "Right")
+		end
+		if value.Back then
+			table.insert(faces, "Back")
+		end
+		if value.Front then
+			table.insert(faces, "Front")
+		end
+		return {
+			type = "Faces",
+			value = faces,
 		}
 	end
 

@@ -1,9 +1,81 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ResolvedRoSyncConfig, RuntimeConnections, RuntimeState, RuntimeStatusSummary } from "../config/types.js";
-import { EMPTY_RUNTIME_STATE } from "../config/types.js";
+import type {
+  ProjectTreeNode,
+  ProjectTreeSnapshot,
+  ResolvedRoSyncConfig,
+  RuntimeConnections,
+  RuntimeDiagnostics,
+  RuntimeState,
+  RuntimeStatusSummary,
+  SerializableNode,
+} from "../config/types.js";
+import { EMPTY_RUNTIME_DIAGNOSTICS, EMPTY_RUNTIME_STATE } from "../config/types.js";
 import type { RoSyncIgnoreRules } from "../config/ignore.js";
-import { buildProjectTree, summarizeProjectTree } from "./project.js";
+import { buildProjectTree, findNodeByPath, summarizeProjectTree } from "./project.js";
+import {
+  createConflictRecord,
+  type ConflictOperationSnapshot,
+  type ConflictRecord,
+  type ConflictStrategy,
+} from "./conflict.js";
+
+export type SyncOrigin = "disk" | "studio" | "editor";
+export type SyncOperation =
+  | {
+      type: "SYNC_INSTANCE";
+      path: string;
+      data: SerializableNode;
+      hash: string;
+    }
+  | {
+      type: "REMOVE_INSTANCE";
+      path: string;
+    }
+  | {
+      type: "RENAME_INSTANCE";
+      oldPath: string;
+      newPath: string;
+    };
+
+interface FlattenedNodeEntry {
+  path: string;
+  node: ProjectTreeNode;
+  data: SerializableNode;
+  localHash: string;
+  subtreeHash: string;
+}
+
+interface SyncRecord {
+  path: string;
+  diskHash: string;
+  studioHash: string | null;
+  lastOrigin: SyncOrigin | null;
+  pendingOutbound: SyncOperation["type"] | null;
+  pendingHash: string | null;
+  conflictId: string | null;
+  updatedAt: string;
+}
+
+export interface SyncEngineHooks {
+  rebuildProjectTree(): Promise<ProjectTreeSnapshot>;
+  createProjectNode(parentPath: string, name: string, className: string): Promise<void>;
+  updateProjectNode(
+    nodePath: string,
+    patch: Partial<Pick<SerializableNode, "properties" | "attributes" | "tags" | "source">>,
+  ): Promise<void>;
+  upsertProjectNode(nodePath: string, payload: SerializableNode): Promise<void>;
+  renameProjectNode(nodePath: string, newName: string): Promise<void>;
+  moveProjectNode(oldPath: string, newPath: string): Promise<void>;
+  deleteProjectNode(nodePath: string): Promise<void>;
+  broadcastToClients(role: "studio" | "editor" | "unknown", payload: unknown): number;
+  logger: {
+    info(message: string): void;
+    warn(message: string): void;
+    error(message: string): void;
+  };
+}
 
 function toRelativePath(rootDir: string, targetPath: string): string {
   return path.relative(rootDir, targetPath).replace(/\\/g, "/");
@@ -11,6 +83,831 @@ function toRelativePath(rootDir: string, targetPath: string): string {
 
 function isScriptFile(fileName: string): boolean {
   return /\.(luau|lua)$/i.test(fileName);
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`).join(",")}}`;
+}
+
+function hashText(text: string): string {
+  return createHash("sha1").update(text).digest("hex");
+}
+
+export function projectNodeToSerializable(node: ProjectTreeNode): SerializableNode {
+  return {
+    name: node.name,
+    className: node.className,
+    properties: { ...node.properties },
+    attributes: { ...node.attributes },
+    tags: [...node.tags],
+    source: node.source ?? undefined,
+    children: node.children.map((child) => projectNodeToSerializable(child)),
+  };
+}
+
+function nodeLocalPayload(node: ProjectTreeNode): SerializableNode {
+  return {
+    name: node.name,
+    className: node.className,
+    properties: { ...node.properties },
+    attributes: { ...node.attributes },
+    tags: [...node.tags],
+    source: node.source ?? undefined,
+  };
+}
+
+function subtreeIdentityPayload(node: SerializableNode): unknown {
+  return {
+    className: node.className,
+    properties: node.properties ?? {},
+    attributes: node.attributes ?? {},
+    tags: node.tags ?? [],
+    source: node.source ?? null,
+    children: (node.children ?? []).map((child) => subtreeIdentityPayload(child)),
+  };
+}
+
+export function hashSerializableNode(node: SerializableNode): string {
+  return hashText(stableStringify(node));
+}
+
+function flattenProjectTree(tree: ProjectTreeSnapshot): Map<string, FlattenedNodeEntry> {
+  const entries = new Map<string, FlattenedNodeEntry>();
+
+  function visit(node: ProjectTreeNode): string {
+    const data = projectNodeToSerializable(node);
+    const localHash = hashSerializableNode(nodeLocalPayload(node));
+    const subtreeHash = hashText(stableStringify(subtreeIdentityPayload(data)));
+    entries.set(node.path, {
+      path: node.path,
+      node,
+      data,
+      localHash,
+      subtreeHash,
+    });
+    for (const child of node.children) {
+      visit(child);
+    }
+    return subtreeHash;
+  }
+
+  for (const service of tree.services) {
+    visit(service);
+  }
+
+  return entries;
+}
+
+function pathDepth(nodePath: string): number {
+  return nodePath.split("/").length;
+}
+
+function isSameOrDescendantPath(candidatePath: string, ancestorPath: string): boolean {
+  return candidatePath === ancestorPath || candidatePath.startsWith(`${ancestorPath}/`);
+}
+
+function filterTopLevelPaths(paths: Iterable<string>): string[] {
+  const sorted = [...paths].sort((left, right) => {
+    const depthDifference = pathDepth(left) - pathDepth(right);
+    return depthDifference !== 0 ? depthDifference : left.localeCompare(right);
+  });
+
+  const selected: string[] = [];
+  for (const currentPath of sorted) {
+    if (selected.some((selectedPath) => isSameOrDescendantPath(currentPath, selectedPath))) {
+      continue;
+    }
+    selected.push(currentPath);
+  }
+
+  return selected;
+}
+
+function conflictSnapshotForOperation(operation: SyncOperation): ConflictOperationSnapshot {
+  if (operation.type === "SYNC_INSTANCE") {
+    return {
+      kind: "sync",
+      path: operation.path,
+      data: operation.data,
+      hash: operation.hash,
+    };
+  }
+
+  if (operation.type === "REMOVE_INSTANCE") {
+    return {
+      kind: "remove",
+      path: operation.path,
+      hash: null,
+    };
+  }
+
+  return {
+    kind: "rename",
+    path: operation.oldPath,
+    newPath: operation.newPath,
+    hash: null,
+  };
+}
+
+export function diffProjectTrees(previousTree: ProjectTreeSnapshot, nextTree: ProjectTreeSnapshot): SyncOperation[] {
+  const previousEntries = flattenProjectTree(previousTree);
+  const nextEntries = flattenProjectTree(nextTree);
+
+  const previousPaths = new Set(previousEntries.keys());
+  const nextPaths = new Set(nextEntries.keys());
+
+  const removedTopLevel = filterTopLevelPaths([...previousPaths].filter((entryPath) => !nextPaths.has(entryPath)));
+  const addedTopLevel = filterTopLevelPaths([...nextPaths].filter((entryPath) => !previousPaths.has(entryPath)));
+  const sharedChanged = filterTopLevelPaths(
+    [...nextPaths].filter((entryPath) => previousPaths.has(entryPath) && previousEntries.get(entryPath)?.localHash !== nextEntries.get(entryPath)?.localHash),
+  );
+
+  const addedByHash = new Map<string, string[]>();
+  for (const addedPath of addedTopLevel) {
+    const addedEntry = nextEntries.get(addedPath);
+    if (!addedEntry) {
+      continue;
+    }
+    const bucket = addedByHash.get(addedEntry.subtreeHash) ?? [];
+    bucket.push(addedPath);
+    addedByHash.set(addedEntry.subtreeHash, bucket);
+  }
+
+  const matchedAddedPaths = new Set<string>();
+  const renameOperations: SyncOperation[] = [];
+  for (const removedPath of removedTopLevel) {
+    const removedEntry = previousEntries.get(removedPath);
+    if (!removedEntry) {
+      continue;
+    }
+
+    const candidates = addedByHash.get(removedEntry.subtreeHash);
+    if (!candidates || candidates.length === 0) {
+      continue;
+    }
+
+    const nextPath = candidates.shift();
+    if (!nextPath) {
+      continue;
+    }
+
+    matchedAddedPaths.add(nextPath);
+    renameOperations.push({
+      type: "RENAME_INSTANCE",
+      oldPath: removedPath,
+      newPath: nextPath,
+    });
+  }
+
+  const removeOperations = removedTopLevel
+    .filter((removedPath) => !renameOperations.some((operation) => operation.type === "RENAME_INSTANCE" && operation.oldPath === removedPath))
+    .sort((left, right) => pathDepth(right) - pathDepth(left))
+    .map<SyncOperation>((removedPath) => ({
+      type: "REMOVE_INSTANCE",
+      path: removedPath,
+    }));
+
+  const syncOperations: SyncOperation[] = [];
+  for (const addedPath of addedTopLevel) {
+    if (matchedAddedPaths.has(addedPath)) {
+      continue;
+    }
+    const entry = nextEntries.get(addedPath);
+    if (!entry) {
+      continue;
+    }
+    syncOperations.push({
+      type: "SYNC_INSTANCE",
+      path: addedPath,
+      data: entry.data,
+      hash: entry.localHash,
+    });
+  }
+
+  for (const changedPath of sharedChanged) {
+    const entry = nextEntries.get(changedPath);
+    if (!entry) {
+      continue;
+    }
+    syncOperations.push({
+      type: "SYNC_INSTANCE",
+      path: changedPath,
+      data: entry.data,
+      hash: entry.localHash,
+    });
+  }
+
+  return [...renameOperations, ...removeOperations, ...syncOperations];
+}
+
+function recordTargetsForOrigin(origin: SyncOrigin): Array<"studio" | "editor"> {
+  switch (origin) {
+    case "studio":
+      return ["editor"];
+    case "editor":
+      return ["studio"];
+    default:
+      return ["studio", "editor"];
+  }
+}
+
+function formatSyncOperation(operation: SyncOperation): unknown {
+  if (operation.type === "SYNC_INSTANCE") {
+    return {
+      type: operation.type,
+      path: operation.path,
+      data: operation.data,
+    };
+  }
+
+  if (operation.type === "REMOVE_INSTANCE") {
+    return operation;
+  }
+
+  return operation;
+}
+
+export class SyncEngine {
+  private currentTree: ProjectTreeSnapshot;
+  private summary: RuntimeStatusSummary;
+  private flattenedEntries = new Map<string, FlattenedNodeEntry>();
+  private records = new Map<string, SyncRecord>();
+  private conflicts = new Map<string, ConflictRecord>();
+  private diagnostics: RuntimeDiagnostics = {
+    ...EMPTY_RUNTIME_DIAGNOSTICS,
+  };
+  private pendingStudioSyncs = new Map<string, string>();
+  private pendingStudioRemovals = new Set<string>();
+  private pendingStudioRenames = new Map<string, string>();
+  private pendingDiskSyncs = new Map<string, string>();
+  private pendingDiskRemovals = new Set<string>();
+  private pendingDiskRenames = new Map<string, string>();
+
+  public constructor(initialTree: ProjectTreeSnapshot, private readonly hooks: SyncEngineHooks) {
+    this.currentTree = initialTree;
+    this.summary = summarizeProjectTree(initialTree);
+    this.reindexRecords();
+  }
+
+  public getProjectTree(): ProjectTreeSnapshot {
+    return this.currentTree;
+  }
+
+  public getProjectSummary(): RuntimeStatusSummary {
+    return this.summary;
+  }
+
+  public getProjectNode(nodePath: string): ProjectTreeNode | null {
+    return findNodeByPath(this.currentTree, nodePath);
+  }
+
+  public getConflicts(): ConflictRecord[] {
+    return [...this.conflicts.values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  public getDiagnostics(): RuntimeDiagnostics {
+    return {
+      ...this.diagnostics,
+    };
+  }
+
+  public noteFileEvent(changedPath: string): void {
+    this.diagnostics.lastFileEventAt = new Date().toISOString();
+    this.diagnostics.lastFileEventPath = changedPath;
+  }
+
+  public noteStudioEvent(changedPath: string): void {
+    this.diagnostics.lastStudioEventAt = new Date().toISOString();
+    this.diagnostics.lastStudioEventPath = changedPath;
+  }
+
+  public noteEditorEvent(changedPath: string): void {
+    this.diagnostics.lastEditorEventAt = new Date().toISOString();
+    this.diagnostics.lastEditorEventPath = changedPath;
+  }
+
+  public async reconcileDiskTree(origin: SyncOrigin): Promise<SyncOperation[]> {
+    const nextTree = await this.hooks.rebuildProjectTree();
+    return this.reconcileTree(nextTree, origin);
+  }
+
+  public async createNode(parentPath: string, name: string, className: string, origin: SyncOrigin = "editor"): Promise<void> {
+    this.noteEditorEvent(`${parentPath}/${name}`);
+    await this.hooks.createProjectNode(parentPath, name, className);
+    await this.reconcileDiskTree(origin);
+  }
+
+  public async updateNode(
+    nodePath: string,
+    patch: Partial<Pick<SerializableNode, "properties" | "attributes" | "tags" | "source">>,
+    origin: SyncOrigin = "editor",
+  ): Promise<void> {
+    this.noteEditorEvent(nodePath);
+    await this.hooks.updateProjectNode(nodePath, patch);
+    await this.reconcileDiskTree(origin);
+  }
+
+  public async upsertNode(nodePath: string, payload: SerializableNode, origin: SyncOrigin = "editor"): Promise<void> {
+    this.noteEditorEvent(nodePath);
+    await this.hooks.upsertProjectNode(nodePath, payload);
+    await this.reconcileDiskTree(origin);
+  }
+
+  public async renameNode(nodePath: string, newName: string, origin: SyncOrigin = "editor"): Promise<void> {
+    const nextPath = `${nodePath.split("/").slice(0, -1).join("/")}/${newName}`.replace(/^\/+/, "");
+    this.noteEditorEvent(nextPath);
+    await this.hooks.renameProjectNode(nodePath, newName);
+    await this.reconcileDiskTree(origin);
+  }
+
+  public async moveNode(oldPath: string, newPath: string, origin: SyncOrigin = "editor"): Promise<void> {
+    this.noteEditorEvent(newPath);
+    await this.hooks.moveProjectNode(oldPath, newPath);
+    await this.reconcileDiskTree(origin);
+  }
+
+  public async deleteNode(nodePath: string, origin: SyncOrigin = "editor"): Promise<void> {
+    this.noteEditorEvent(nodePath);
+    await this.hooks.deleteProjectNode(nodePath);
+    await this.reconcileDiskTree(origin);
+  }
+
+  public async handleStudioSync(pathValue: string, data: SerializableNode): Promise<void> {
+    this.noteStudioEvent(pathValue);
+    const remoteHash = hashText(
+      stableStringify({
+        name: data.name,
+        className: data.className,
+        properties: data.properties ?? {},
+        attributes: data.attributes ?? {},
+        tags: data.tags ?? [],
+        source: data.source ?? undefined,
+      }),
+    );
+
+    if (this.consumePendingStudioSync(pathValue, remoteHash)) {
+      return;
+    }
+
+    const localEntry = this.flattenedEntries.get(pathValue);
+    const localRecord = this.records.get(pathValue);
+    if (localRecord?.pendingOutbound === "SYNC_INSTANCE" && localRecord.pendingHash && localRecord.pendingHash !== remoteHash) {
+      this.registerConflict(
+        pathValue,
+        "Studio and disk changed the same instance before sync completed.",
+        localEntry
+          ? {
+              kind: "sync",
+              path: pathValue,
+              data: localEntry.data,
+              hash: localEntry.localHash,
+            }
+          : null,
+        {
+          kind: "sync",
+          path: pathValue,
+          data,
+          hash: remoteHash,
+        },
+      );
+      return;
+    }
+
+    await this.hooks.upsertProjectNode(pathValue, data);
+    await this.reconcileDiskTree("studio");
+  }
+
+  public async handleStudioRemove(pathValue: string): Promise<void> {
+    this.noteStudioEvent(pathValue);
+
+    if (this.consumePendingStudioRemoval(pathValue)) {
+      return;
+    }
+
+    const localRecord = this.records.get(pathValue);
+    if (localRecord?.pendingOutbound === "SYNC_INSTANCE" || localRecord?.pendingOutbound === "RENAME_INSTANCE") {
+      const localEntry = this.flattenedEntries.get(pathValue);
+      this.registerConflict(
+        pathValue,
+        "Studio removed an instance that still has pending local changes.",
+        localEntry
+          ? {
+              kind: "sync",
+              path: pathValue,
+              data: localEntry.data,
+              hash: localEntry.localHash,
+            }
+          : null,
+        {
+          kind: "remove",
+          path: pathValue,
+          hash: null,
+        },
+      );
+      return;
+    }
+
+    await this.hooks.deleteProjectNode(pathValue);
+    await this.reconcileDiskTree("studio");
+  }
+
+  public async handleStudioRename(oldPath: string, newPath: string): Promise<void> {
+    this.noteStudioEvent(newPath);
+
+    if (this.consumePendingStudioRename(oldPath, newPath)) {
+      return;
+    }
+
+    const localRecord = this.records.get(oldPath);
+    if (localRecord?.pendingOutbound === "SYNC_INSTANCE") {
+      const localEntry = this.flattenedEntries.get(oldPath);
+      this.registerConflict(
+        oldPath,
+        "Studio renamed an instance that still has pending local changes.",
+        localEntry
+          ? {
+              kind: "sync",
+              path: oldPath,
+              data: localEntry.data,
+              hash: localEntry.localHash,
+            }
+          : null,
+        {
+          kind: "rename",
+          path: oldPath,
+          newPath,
+          hash: null,
+        },
+      );
+      return;
+    }
+
+    await this.hooks.moveProjectNode(oldPath, newPath);
+    await this.reconcileDiskTree("studio");
+  }
+
+  public pushToStudio(service?: string): number {
+    const selectedNodes = service
+      ? this.currentTree.services.filter((serviceNode) => serviceNode.name === service)
+      : this.currentTree.services;
+
+    let delivered = 0;
+    for (const node of selectedNodes) {
+      const entry = this.flattenedEntries.get(node.path);
+      if (!entry) {
+        continue;
+      }
+
+      const operation: SyncOperation = {
+        type: "SYNC_INSTANCE",
+        path: node.path,
+        data: entry.data,
+        hash: entry.localHash,
+      };
+      delivered += this.broadcastOperation(operation, "editor");
+    }
+
+    return delivered;
+  }
+
+  public requestPull(service?: string): number {
+    return this.hooks.broadcastToClients("studio", {
+      type: "PULL_REQUEST",
+      service: service ?? null,
+    });
+  }
+
+  public async resolveConflict(id: string, strategy: ConflictStrategy): Promise<boolean> {
+    const conflict = this.conflicts.get(id);
+    if (!conflict) {
+      return false;
+    }
+
+    if (strategy === "manual") {
+      this.clearConflict(id);
+      return true;
+    }
+
+    const chosen = strategy === "ours" ? conflict.local : conflict.remote;
+    if (!chosen) {
+      this.clearConflict(id);
+      return true;
+    }
+
+    if (chosen.kind === "sync" && chosen.data) {
+      if (strategy === "ours") {
+        this.broadcastOperation(
+          {
+            type: "SYNC_INSTANCE",
+            path: chosen.path,
+            data: chosen.data,
+            hash: chosen.hash ?? hashSerializableNode(chosen.data),
+          },
+          "editor",
+        );
+      } else {
+        await this.hooks.upsertProjectNode(chosen.path, chosen.data);
+        await this.reconcileDiskTree("studio");
+      }
+    } else if (chosen.kind === "remove") {
+      if (strategy === "ours") {
+        this.broadcastOperation(
+          {
+            type: "REMOVE_INSTANCE",
+            path: chosen.path,
+          },
+          "editor",
+        );
+      } else {
+        await this.hooks.deleteProjectNode(chosen.path);
+        await this.reconcileDiskTree("studio");
+      }
+    } else if (chosen.kind === "rename" && chosen.newPath) {
+      if (strategy === "ours") {
+        this.broadcastOperation(
+          {
+            type: "RENAME_INSTANCE",
+            oldPath: chosen.path,
+            newPath: chosen.newPath,
+          },
+          "editor",
+        );
+      } else {
+        await this.hooks.moveProjectNode(chosen.path, chosen.newPath);
+        await this.reconcileDiskTree("studio");
+      }
+    }
+
+    this.clearConflict(id);
+    return true;
+  }
+
+  private reconcileTree(nextTree: ProjectTreeSnapshot, origin: SyncOrigin): SyncOperation[] {
+    const previousTree = this.currentTree;
+    const operations = diffProjectTrees(previousTree, nextTree);
+
+    this.currentTree = nextTree;
+    this.summary = summarizeProjectTree(nextTree);
+    this.reindexRecords();
+
+    const emittedOperations: SyncOperation[] = [];
+    for (const operation of operations) {
+      if (origin === "disk" && this.consumePendingDiskEcho(operation)) {
+        continue;
+      }
+
+      if (origin === "studio" || origin === "editor") {
+        this.registerPendingDiskEcho(operation);
+      }
+
+      const delivered = this.broadcastOperation(operation, origin);
+      if (delivered > 0) {
+        emittedOperations.push(operation);
+      }
+    }
+
+    this.refreshDiagnostics();
+    return emittedOperations;
+  }
+
+  private broadcastOperation(operation: SyncOperation, origin: SyncOrigin): number {
+    const targets = recordTargetsForOrigin(origin);
+    let delivered = 0;
+    let deliveredToStudio = 0;
+
+    for (const target of targets) {
+      const deliveredCount = this.hooks.broadcastToClients(target, formatSyncOperation(operation));
+      delivered += deliveredCount;
+      if (target === "studio") {
+        deliveredToStudio += deliveredCount;
+      }
+    }
+
+    if (deliveredToStudio > 0) {
+      this.registerPendingStudioEcho(operation);
+    }
+
+    const targetRecordPath = operation.type === "RENAME_INSTANCE" ? operation.newPath : operation.path;
+    const record = this.records.get(targetRecordPath);
+    if (record) {
+      record.lastOrigin = origin;
+      record.pendingOutbound = deliveredToStudio > 0 ? operation.type : null;
+      record.pendingHash = deliveredToStudio > 0 && operation.type === "SYNC_INSTANCE" ? operation.hash : null;
+      record.updatedAt = new Date().toISOString();
+    }
+
+    return delivered;
+  }
+
+  private registerPendingStudioEcho(operation: SyncOperation): void {
+    if (operation.type === "SYNC_INSTANCE") {
+      this.pendingStudioSyncs.set(operation.path, operation.hash);
+      return;
+    }
+
+    if (operation.type === "REMOVE_INSTANCE") {
+      this.pendingStudioRemovals.add(operation.path);
+      return;
+    }
+
+    this.pendingStudioRenames.set(operation.oldPath, operation.newPath);
+  }
+
+  private consumePendingStudioSync(pathValue: string, hash: string): boolean {
+    const pendingHash = this.pendingStudioSyncs.get(pathValue);
+    if (!pendingHash || pendingHash !== hash) {
+      return false;
+    }
+
+    this.pendingStudioSyncs.delete(pathValue);
+    const record = this.records.get(pathValue);
+    if (record) {
+      record.studioHash = hash;
+      record.pendingOutbound = null;
+      record.pendingHash = null;
+      record.conflictId = null;
+      record.updatedAt = new Date().toISOString();
+    }
+    this.refreshDiagnostics();
+    return true;
+  }
+
+  private consumePendingStudioRemoval(pathValue: string): boolean {
+    if (!this.pendingStudioRemovals.has(pathValue)) {
+      return false;
+    }
+
+    this.pendingStudioRemovals.delete(pathValue);
+    this.refreshDiagnostics();
+    return true;
+  }
+
+  private consumePendingStudioRename(oldPath: string, newPath: string): boolean {
+    const pendingNewPath = this.pendingStudioRenames.get(oldPath);
+    if (!pendingNewPath || pendingNewPath !== newPath) {
+      return false;
+    }
+
+    this.pendingStudioRenames.delete(oldPath);
+    this.refreshDiagnostics();
+    return true;
+  }
+
+  private registerPendingDiskEcho(operation: SyncOperation): void {
+    if (operation.type === "SYNC_INSTANCE") {
+      this.pendingDiskSyncs.set(operation.path, operation.hash);
+      return;
+    }
+
+    if (operation.type === "REMOVE_INSTANCE") {
+      this.pendingDiskRemovals.add(operation.path);
+      return;
+    }
+
+    this.pendingDiskRenames.set(operation.oldPath, operation.newPath);
+  }
+
+  private consumePendingDiskEcho(operation: SyncOperation): boolean {
+    if (operation.type === "SYNC_INSTANCE") {
+      const pendingHash = this.pendingDiskSyncs.get(operation.path);
+      if (pendingHash && pendingHash === operation.hash) {
+        this.pendingDiskSyncs.delete(operation.path);
+        this.refreshDiagnostics();
+        return true;
+      }
+      return false;
+    }
+
+    if (operation.type === "REMOVE_INSTANCE") {
+      if (!this.pendingDiskRemovals.has(operation.path)) {
+        return false;
+      }
+      this.pendingDiskRemovals.delete(operation.path);
+      this.refreshDiagnostics();
+      return true;
+    }
+
+    const pendingNewPath = this.pendingDiskRenames.get(operation.oldPath);
+    if (!pendingNewPath || pendingNewPath !== operation.newPath) {
+      return false;
+    }
+
+    this.pendingDiskRenames.delete(operation.oldPath);
+    this.refreshDiagnostics();
+    return true;
+  }
+
+  private registerConflict(
+    pathValue: string,
+    reason: string,
+    local: ConflictOperationSnapshot | null,
+    remote: ConflictOperationSnapshot | null,
+  ): void {
+    const conflict = createConflictRecord({
+      path: pathValue,
+      reason,
+      local,
+      remote,
+    });
+
+    this.conflicts.set(conflict.id, conflict);
+    const record = this.records.get(pathValue);
+    if (record) {
+      record.conflictId = conflict.id;
+      record.pendingOutbound = null;
+      record.pendingHash = null;
+      record.updatedAt = new Date().toISOString();
+    }
+
+    this.hooks.broadcastToClients("editor", {
+      type: "CONFLICT",
+      id: conflict.id,
+      path: conflict.path,
+      reason: conflict.reason,
+      createdAt: conflict.createdAt,
+      local: conflict.local,
+      remote: conflict.remote,
+      localHash: conflict.localHash,
+      remoteHash: conflict.remoteHash,
+    });
+    this.refreshDiagnostics();
+  }
+
+  private clearConflict(id: string): void {
+    const conflict = this.conflicts.get(id);
+    if (!conflict) {
+      return;
+    }
+
+    this.conflicts.delete(id);
+    const record = this.records.get(conflict.path);
+    if (record && record.conflictId === id) {
+      record.conflictId = null;
+      record.updatedAt = new Date().toISOString();
+    }
+    this.refreshDiagnostics();
+  }
+
+  private reindexRecords(): void {
+    this.flattenedEntries = flattenProjectTree(this.currentTree);
+    const nextRecords = new Map<string, SyncRecord>();
+    const now = new Date().toISOString();
+
+    for (const [entryPath, entry] of this.flattenedEntries) {
+      const existingRecord = this.records.get(entryPath);
+      nextRecords.set(entryPath, {
+        path: entryPath,
+        diskHash: entry.localHash,
+        studioHash: existingRecord?.studioHash ?? null,
+        lastOrigin: existingRecord?.lastOrigin ?? null,
+        pendingOutbound: existingRecord?.pendingOutbound ?? null,
+        pendingHash: existingRecord?.pendingHash ?? null,
+        conflictId: existingRecord?.conflictId ?? null,
+        updatedAt: now,
+      });
+    }
+
+    this.records = nextRecords;
+    this.refreshDiagnostics();
+  }
+
+  private refreshDiagnostics(): void {
+    let syncedInstances = 0;
+    let driftedInstances = 0;
+
+    for (const record of this.records.values()) {
+      if (record.conflictId) {
+        driftedInstances += 1;
+        continue;
+      }
+
+      if (record.pendingOutbound || (record.studioHash && record.studioHash !== record.diskHash)) {
+        driftedInstances += 1;
+        continue;
+      }
+
+      syncedInstances += 1;
+    }
+
+    this.diagnostics = {
+      ...this.diagnostics,
+      syncedInstances,
+      driftedInstances,
+      conflictCount: this.conflicts.size,
+      pendingOutboundCount: this.pendingStudioSyncs.size + this.pendingStudioRemovals.size + this.pendingStudioRenames.size,
+    };
+  }
 }
 
 export async function scanProjectState(config: ResolvedRoSyncConfig, ignoreRules: RoSyncIgnoreRules): Promise<RuntimeStatusSummary> {
@@ -70,6 +967,10 @@ export async function readRuntimeState(config: ResolvedRoSyncConfig): Promise<Ru
       summary: {
         ...EMPTY_RUNTIME_STATE.summary,
         ...(parsed.summary ?? {}),
+      },
+      diagnostics: {
+        ...EMPTY_RUNTIME_STATE.diagnostics,
+        ...(parsed.diagnostics ?? {}),
       },
     };
   } catch (error) {

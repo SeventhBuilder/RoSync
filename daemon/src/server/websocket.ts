@@ -123,6 +123,7 @@ export function attachWebSocketServer(
               message: "SCHEMA_DUMP received.",
             });
             break;
+          case "SYNC_INSTANCE":
           case "INSTANCE_ADDED":
           case "INSTANCE_CHANGED": {
             const nodePath = typeof payload.path === "string" ? payload.path : null;
@@ -139,21 +140,15 @@ export function attachWebSocketServer(
               break;
             }
 
-            await context.upsertProjectNode(nodePath, data as never);
-            await context.refreshProjectState();
+            await context.syncFromStudio(nodePath, data as never);
             safeSend(socket, {
               type: "ACK",
               message: `${type} applied.`,
               path: nodePath,
             });
-            for (const targetSession of sessions.values()) {
-              if (targetSession.id === session.id || targetSession.socket.readyState !== WebSocket.OPEN) {
-                continue;
-              }
-              safeSend(targetSession.socket, payload);
-            }
             break;
           }
+          case "REMOVE_INSTANCE":
           case "INSTANCE_REMOVED": {
             const nodePath = typeof payload.path === "string" ? payload.path : null;
             if (!nodePath) {
@@ -165,21 +160,15 @@ export function attachWebSocketServer(
               break;
             }
 
-            await context.deleteProjectNode(nodePath);
-            await context.refreshProjectState();
+            await context.removeFromStudio(nodePath);
             safeSend(socket, {
               type: "ACK",
-              message: "INSTANCE_REMOVED applied.",
+              message: `${type} applied.`,
               path: nodePath,
             });
-            for (const targetSession of sessions.values()) {
-              if (targetSession.id === session.id || targetSession.socket.readyState !== WebSocket.OPEN) {
-                continue;
-              }
-              safeSend(targetSession.socket, payload);
-            }
             break;
           }
+          case "RENAME_INSTANCE":
           case "INSTANCE_RENAMED": {
             const oldPath = typeof payload.oldPath === "string" ? payload.oldPath : null;
             const newPath = typeof payload.newPath === "string" ? payload.newPath : null;
@@ -192,37 +181,77 @@ export function attachWebSocketServer(
               break;
             }
 
-            await context.moveProjectNode(oldPath, newPath);
-            await context.refreshProjectState();
+            await context.renameFromStudio(oldPath, newPath);
             safeSend(socket, {
               type: "ACK",
-              message: "INSTANCE_RENAMED applied.",
+              message: `${type} applied.`,
               oldPath,
               newPath,
             });
-            for (const targetSession of sessions.values()) {
-              if (targetSession.id === session.id || targetSession.socket.readyState !== WebSocket.OPEN) {
-                continue;
-              }
-              safeSend(targetSession.socket, payload);
-            }
             break;
           }
           case "PULL_REQUEST": {
-            const tree = await context.getProjectTree();
+            const service = typeof payload.service === "string" ? payload.service : undefined;
+            const delivered = context.pushToStudio(service);
             safeSend(socket, {
-              type: "PROJECT_TREE",
-              tree,
+              type: "ACK",
+              message: "PULL_REQUEST acknowledged.",
+              delivered,
+              service: service ?? null,
             });
             break;
           }
-          default:
-            for (const targetSession of sessions.values()) {
-              if (targetSession.id === session.id || targetSession.socket.readyState !== WebSocket.OPEN) {
-                continue;
-              }
-              safeSend(targetSession.socket, payload);
+          case "PUSH_REQUEST": {
+            const service = typeof payload.service === "string" ? payload.service : undefined;
+            const delivered = context.requestPull(service);
+            safeSend(socket, {
+              type: "ACK",
+              message: "PUSH_REQUEST acknowledged.",
+              delivered,
+              service: service ?? null,
+            });
+            break;
+          }
+          case "RESOLVE_CONFLICT": {
+            const id = typeof payload.id === "string" ? payload.id : null;
+            const strategy =
+              payload.strategy === "ours" || payload.strategy === "theirs" || payload.strategy === "manual"
+                ? payload.strategy
+                : null;
+            if (!id || !strategy) {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "INVALID_CONFLICT_RESOLUTION",
+                message: "Expected { id, strategy }.",
+              });
+              break;
             }
+
+            const resolved = await context.resolveConflict(id, strategy);
+            if (resolved) {
+              safeSend(socket, {
+                type: "ACK",
+                message: "Conflict resolved.",
+                id,
+                strategy,
+              });
+            } else {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "CONFLICT_NOT_FOUND",
+                message: `Conflict ${id} was not found.`,
+                id,
+                strategy,
+              });
+            }
+            break;
+          }
+          default:
+            safeSend(socket, {
+              type: "ERROR",
+              code: "UNKNOWN_MESSAGE",
+              message: `Unsupported message type ${String(type)}.`,
+            });
             break;
         }
       } catch (error) {

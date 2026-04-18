@@ -23,9 +23,13 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
   "devDependencies": {
     "@types/node": "^22.15.19",
     "@types/vscode": "^1.95.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.8.3"
   },
   "contributes": {
