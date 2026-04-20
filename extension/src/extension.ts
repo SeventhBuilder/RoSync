@@ -1,3 +1,4 @@
+import path from "node:path";
 import * as vscode from "vscode";
 import { DaemonClient, type ConnectionState, type ProjectTreeNode } from "./daemon/DaemonClient.js";
 import { ExplorerProvider } from "./explorer/ExplorerProvider.js";
@@ -17,6 +18,39 @@ const CREATEABLE_CLASSES = [
   "BoolValue",
   "NumberValue",
 ];
+
+const ROSYNC_SCRIPT_FILES = new Set(["init.server.luau", "init.client.luau", "init.luau"]);
+
+function normalizeFsPath(targetPath: string): string {
+  return targetPath.replace(/\\/g, "/");
+}
+
+function inferRoSyncNodePath(uri: vscode.Uri): string | null {
+  if (uri.scheme !== "file") {
+    return null;
+  }
+
+  const normalizedPath = normalizeFsPath(uri.fsPath);
+  const marker = "/src/";
+  const markerIndex = normalizedPath.lastIndexOf(marker);
+  if (markerIndex === -1) {
+    return null;
+  }
+
+  const relativePath = normalizedPath.slice(markerIndex + marker.length);
+  if (!relativePath) {
+    return null;
+  }
+
+  const fileName = path.posix.basename(relativePath);
+  let candidatePath = relativePath;
+  if (fileName === ".instance.json" || ROSYNC_SCRIPT_FILES.has(fileName) || /\.(luau|lua)$/i.test(fileName)) {
+    candidatePath = path.posix.dirname(relativePath);
+  }
+
+  const normalizedNodePath = candidatePath.replace(/^\/+|\/+$/g, "");
+  return normalizedNodePath && normalizedNodePath !== "." ? normalizedNodePath : null;
+}
 
 async function openSource(node: ProjectTreeNode): Promise<void> {
   const targetPath = node.sourceFilePath ?? node.metadataPath;
@@ -152,6 +186,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("rosync.deleteNode", (node?: ProjectTreeNode) =>
       deleteInstance(daemonClient, explorerProvider, node),
     ),
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      const nodePath = inferRoSyncNodePath(document.uri);
+      if (!nodePath) {
+        return;
+      }
+
+      daemonClient.reportEditorActivity({
+        action: "update",
+        path: nodePath,
+      });
+    }),
   );
 
   context.subscriptions.push(

@@ -139,6 +139,33 @@ export function attachWebSocketServer(
               message: "SCHEMA_DUMP received.",
             });
             break;
+          case "EDITOR_ACTIVITY": {
+            const action =
+              payload.action === "add" || payload.action === "update" || payload.action === "remove" || payload.action === "rename"
+                ? payload.action
+                : null;
+            if (!action) {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "INVALID_EDITOR_ACTIVITY",
+                message: "Expected action in EDITOR_ACTIVITY.",
+              });
+              break;
+            }
+
+            context.noteEditorActivity({
+              action,
+              client: typeof payload.client === "string" ? payload.client : "vscode",
+              path: typeof payload.path === "string" ? payload.path : null,
+              oldPath: typeof payload.oldPath === "string" ? payload.oldPath : null,
+              newPath: typeof payload.newPath === "string" ? payload.newPath : null,
+            });
+            safeSend(socket, {
+              type: "ACK",
+              message: "EDITOR_ACTIVITY recorded.",
+            });
+            break;
+          }
           case "SYNC_INSTANCE":
           case "INSTANCE_ADDED":
           case "INSTANCE_CHANGED": {

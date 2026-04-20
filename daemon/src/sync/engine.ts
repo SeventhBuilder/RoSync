@@ -38,6 +38,28 @@ export type SyncOperation =
       oldPath: string;
       newPath: string;
     };
+export type SyncActivityAction = "add" | "update" | "remove" | "rename";
+
+interface SyncActivityEntry {
+  action: SyncActivityAction;
+  path: string;
+  nextPath?: string;
+}
+
+interface EditorActivityHint {
+  action: SyncActivityAction;
+  client: string;
+  path: string | null;
+  oldPath: string | null;
+  newPath: string | null;
+  expiresAt: number;
+}
+
+const EDITOR_ACTIVITY_TTL_MS = 3_000;
+const ANSI_RESET = "\u001b[0m";
+const ANSI_GREEN = "\u001b[32m";
+const ANSI_YELLOW = "\u001b[33m";
+const ANSI_RED = "\u001b[31m";
 
 interface FlattenedNodeEntry {
   path: string;
@@ -322,20 +344,93 @@ function recordTargetsForOrigin(origin: SyncOrigin): Array<"studio" | "editor"> 
   }
 }
 
-function formatSyncOperation(operation: SyncOperation): unknown {
+function normalizeSyncPath(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function syncOriginLabel(origin: SyncOrigin): string {
+  switch (origin) {
+    case "studio":
+      return "Studio";
+    case "editor":
+      return "VSCode";
+    default:
+      return "Disk";
+  }
+}
+
+function actionDisplay(action: SyncActivityAction): { token: string; color: string } {
+  switch (action) {
+    case "add":
+      return { token: "+ Add", color: ANSI_GREEN };
+    case "remove":
+      return { token: "- Remove", color: ANSI_RED };
+    case "rename":
+      return { token: "~ Rename", color: ANSI_YELLOW };
+    default:
+      return { token: "~ Update", color: ANSI_YELLOW };
+  }
+}
+
+function describeSyncActivity(
+  operation: SyncOperation,
+  previousEntries: ReadonlyMap<string, FlattenedNodeEntry>,
+): SyncActivityEntry {
+  if (operation.type === "REMOVE_INSTANCE") {
+    return {
+      action: "remove",
+      path: operation.path,
+    };
+  }
+
+  if (operation.type === "RENAME_INSTANCE") {
+    return {
+      action: "rename",
+      path: operation.oldPath,
+      nextPath: operation.newPath,
+    };
+  }
+
+  return {
+    action: previousEntries.has(operation.path) ? "update" : "add",
+    path: operation.path,
+  };
+}
+
+export function formatSyncActivityLine(origin: SyncOrigin, activity: SyncActivityEntry, useColor = false): string {
+  const originText = `[${syncOriginLabel(origin)}]`;
+  const display = actionDisplay(activity.action);
+  const actionText = useColor ? `${display.color}${display.token}${ANSI_RESET}` : display.token;
+  const pathText = activity.nextPath ? `${activity.path} -> ${activity.nextPath}` : activity.path;
+  return `${originText} ${actionText} ${pathText}`;
+}
+
+function formatSyncOperation(operation: SyncOperation, origin: SyncOrigin): unknown {
   if (operation.type === "SYNC_INSTANCE") {
     return {
       type: operation.type,
       path: operation.path,
       data: operation.data,
+      origin,
     };
   }
 
   if (operation.type === "REMOVE_INSTANCE") {
-    return operation;
+    return {
+      ...operation,
+      origin,
+    };
   }
 
-  return operation;
+  return {
+    ...operation,
+    origin,
+  };
 }
 
 export class SyncEngine {
@@ -353,6 +448,7 @@ export class SyncEngine {
   private pendingDiskSyncs = new Map<string, string>();
   private pendingDiskRemovals = new Set<string>();
   private pendingDiskRenames = new Map<string, string>();
+  private editorActivityHints: EditorActivityHint[] = [];
 
   public constructor(initialTree: ProjectTreeSnapshot, private readonly hooks: SyncEngineHooks) {
     this.currentTree = initialTree;
@@ -395,6 +491,32 @@ export class SyncEngine {
   public noteEditorEvent(changedPath: string): void {
     this.diagnostics.lastEditorEventAt = new Date().toISOString();
     this.diagnostics.lastEditorEventPath = changedPath;
+  }
+
+  public noteEditorActivity(activity: {
+    action: SyncActivityAction;
+    client?: string | null;
+    path?: string | null;
+    oldPath?: string | null;
+    newPath?: string | null;
+  }): void {
+    this.pruneEditorActivityHints();
+
+    const hint: EditorActivityHint = {
+      action: activity.action,
+      client: activity.client ?? "vscode",
+      path: normalizeSyncPath(activity.path),
+      oldPath: normalizeSyncPath(activity.oldPath),
+      newPath: normalizeSyncPath(activity.newPath),
+      expiresAt: Date.now() + EDITOR_ACTIVITY_TTL_MS,
+    };
+
+    if (!hint.path && !hint.oldPath && !hint.newPath) {
+      return;
+    }
+
+    this.editorActivityHints.push(hint);
+    this.noteEditorEvent(hint.newPath ?? hint.path ?? hint.oldPath ?? "editor-activity");
   }
 
   public async reconcileDiskTree(origin: SyncOrigin): Promise<SyncOperation[]> {
@@ -575,7 +697,7 @@ export class SyncEngine {
         data: entry.data,
         hash: entry.localHash,
       };
-      delivered += this.broadcastOperation(operation, "editor");
+      delivered += this.broadcastOperation(operation, "editor", "editor");
     }
 
     return delivered;
@@ -615,6 +737,7 @@ export class SyncEngine {
             hash: chosen.hash ?? hashSerializableNode(chosen.data),
           },
           "editor",
+          "editor",
         );
       } else {
         await this.hooks.upsertProjectNode(chosen.path, chosen.data);
@@ -627,6 +750,7 @@ export class SyncEngine {
             type: "REMOVE_INSTANCE",
             path: chosen.path,
           },
+          "editor",
           "editor",
         );
       } else {
@@ -642,6 +766,7 @@ export class SyncEngine {
             newPath: chosen.newPath,
           },
           "editor",
+          "editor",
         );
       } else {
         await this.hooks.moveProjectNode(chosen.path, chosen.newPath);
@@ -655,6 +780,7 @@ export class SyncEngine {
 
   private reconcileTree(nextTree: ProjectTreeSnapshot, origin: SyncOrigin): SyncOperation[] {
     const previousTree = this.currentTree;
+    const previousEntries = this.flattenedEntries;
     const operations = diffProjectTrees(previousTree, nextTree);
 
     this.currentTree = nextTree;
@@ -671,7 +797,9 @@ export class SyncEngine {
         this.registerPendingDiskEcho(operation);
       }
 
-      const delivered = this.broadcastOperation(operation, origin);
+      const activityOrigin = this.resolveActivityOrigin(operation, origin);
+      this.hooks.logger.info(formatSyncActivityLine(activityOrigin, describeSyncActivity(operation, previousEntries), true));
+      const delivered = this.broadcastOperation(operation, origin, activityOrigin);
       if (delivered > 0) {
         emittedOperations.push(operation);
       }
@@ -681,13 +809,13 @@ export class SyncEngine {
     return emittedOperations;
   }
 
-  private broadcastOperation(operation: SyncOperation, origin: SyncOrigin): number {
-    const targets = recordTargetsForOrigin(origin);
+  private broadcastOperation(operation: SyncOperation, routingOrigin: SyncOrigin, activityOrigin: SyncOrigin): number {
+    const targets = recordTargetsForOrigin(routingOrigin);
     let delivered = 0;
     let deliveredToStudio = 0;
 
     for (const target of targets) {
-      const deliveredCount = this.hooks.broadcastToClients(target, formatSyncOperation(operation));
+      const deliveredCount = this.hooks.broadcastToClients(target, formatSyncOperation(operation, activityOrigin));
       delivered += deliveredCount;
       if (target === "studio") {
         deliveredToStudio += deliveredCount;
@@ -701,7 +829,7 @@ export class SyncEngine {
     const targetRecordPath = operation.type === "RENAME_INSTANCE" ? operation.newPath : operation.path;
     const record = this.records.get(targetRecordPath);
     if (record) {
-      record.lastOrigin = origin;
+      record.lastOrigin = activityOrigin;
       record.pendingOutbound = deliveredToStudio > 0 ? operation.type : null;
       record.pendingHash = deliveredToStudio > 0 && operation.type === "SYNC_INSTANCE" ? operation.hash : null;
       record.updatedAt = new Date().toISOString();
@@ -806,6 +934,42 @@ export class SyncEngine {
     this.pendingDiskRenames.delete(operation.oldPath);
     this.refreshDiagnostics();
     return true;
+  }
+
+  private resolveActivityOrigin(operation: SyncOperation, origin: SyncOrigin): SyncOrigin {
+    if (origin !== "disk") {
+      return origin;
+    }
+
+    this.pruneEditorActivityHints();
+    const hintIndex = this.editorActivityHints.findIndex((hint) => this.matchesEditorActivityHint(hint, operation));
+    if (hintIndex === -1) {
+      return "disk";
+    }
+
+    this.editorActivityHints.splice(hintIndex, 1);
+    return "editor";
+  }
+
+  private pruneEditorActivityHints(): void {
+    const now = Date.now();
+    this.editorActivityHints = this.editorActivityHints.filter((hint) => hint.expiresAt > now);
+  }
+
+  private matchesEditorActivityHint(hint: EditorActivityHint, operation: SyncOperation): boolean {
+    if (hint.action === "rename" && operation.type === "RENAME_INSTANCE") {
+      return hint.oldPath === operation.oldPath && hint.newPath === operation.newPath;
+    }
+
+    if (hint.action === "remove" && operation.type === "REMOVE_INSTANCE") {
+      return hint.path === operation.path;
+    }
+
+    if ((hint.action === "add" || hint.action === "update") && operation.type === "SYNC_INSTANCE") {
+      return hint.path === operation.path;
+    }
+
+    return false;
   }
 
   private registerConflict(

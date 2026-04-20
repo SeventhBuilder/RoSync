@@ -10,6 +10,7 @@ import type {
 } from "../config/types.js";
 import type { SchemaCache } from "../schema/types.js";
 import type { ConflictRecord, ConflictStrategy } from "../sync/conflict.js";
+import type { SyncActivityAction } from "../sync/engine.js";
 
 export interface ServerLogger {
   info(message: string): void;
@@ -42,6 +43,13 @@ export interface WatchServerContext {
   syncFromStudio(nodePath: string, payload: SerializableNode): Promise<void>;
   removeFromStudio(nodePath: string): Promise<void>;
   renameFromStudio(oldPath: string, newPath: string): Promise<void>;
+  noteEditorActivity(activity: {
+    action: SyncActivityAction;
+    client?: string | null;
+    path?: string | null;
+    oldPath?: string | null;
+    newPath?: string | null;
+  }): void;
   pushToStudio(service?: string): number;
   requestPull(service?: string): number;
   broadcastToClients(role: "studio" | "editor" | "unknown", payload: unknown): number;

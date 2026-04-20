@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProjectTreeNode, ProjectTreeSnapshot, SerializableNode } from "../src/config/types.js";
-import { diffProjectTrees, projectNodeToSerializable, SyncEngine } from "../src/sync/engine.js";
+import { diffProjectTrees, formatSyncActivityLine, projectNodeToSerializable, SyncEngine } from "../src/sync/engine.js";
 
 function makeNode(
   pathValue: string,
@@ -90,6 +90,20 @@ test("diffProjectTrees detects subtree renames", () => {
       newPath: "Workspace/NewModel",
     },
   ]);
+});
+
+test("formatSyncActivityLine renders source labels and action text", () => {
+  const line = formatSyncActivityLine(
+    "editor",
+    {
+      action: "rename",
+      path: "ReplicatedStorage/Foo",
+      nextPath: "ReplicatedStorage/Bar",
+    },
+    false,
+  );
+
+  assert.equal(line, "[VSCode] ~ Rename ReplicatedStorage/Foo -> ReplicatedStorage/Bar");
 });
 
 test("SyncEngine suppresses matching studio echoes", async () => {
@@ -197,4 +211,52 @@ test("SyncEngine records a conflict when Studio diverges from pending local stat
       (payload) => typeof payload === "object" && payload !== null && "type" in payload && (payload as { type: string }).type === "CONFLICT",
     ),
   );
+});
+
+test("SyncEngine applies editor activity hints to disk-origin updates", async () => {
+  const initialTree = makeTree([
+    makeNode("Workspace/Baseplate", "Part", {
+      Anchored: {
+        type: "bool",
+        value: true,
+      },
+    }),
+  ]);
+  const rebuiltTree = makeTree([
+    makeNode("Workspace/Baseplate", "Part", {
+      Anchored: {
+        type: "bool",
+        value: false,
+      },
+    }),
+  ]);
+
+  const logLines: string[] = [];
+  const engine = new SyncEngine(initialTree, {
+    rebuildProjectTree: async () => rebuiltTree,
+    createProjectNode: async () => undefined,
+    updateProjectNode: async () => undefined,
+    upsertProjectNode: async (_nodePath: string, _payload: SerializableNode) => undefined,
+    renameProjectNode: async () => undefined,
+    moveProjectNode: async () => undefined,
+    deleteProjectNode: async () => undefined,
+    broadcastToClients: () => 1,
+    logger: {
+      info(message) {
+        logLines.push(message.replace(/\u001b\[[0-9;]*m/g, ""));
+      },
+      warn() {},
+      error() {},
+    },
+  });
+
+  engine.noteEditorActivity({
+    action: "update",
+    client: "vscode",
+    path: "Workspace/Baseplate",
+  });
+
+  await engine.reconcileDiskTree("disk");
+
+  assert.ok(logLines.includes("[VSCode] ~ Update Workspace/Baseplate"));
 });

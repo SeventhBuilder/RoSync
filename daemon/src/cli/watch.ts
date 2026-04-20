@@ -159,6 +159,9 @@ export function registerWatchCommand(program: Command): void {
           await engine.handleStudioRename(oldPath, newPath);
           await persistRuntimeState();
         },
+        noteEditorActivity: (activity) => {
+          engine.noteEditorActivity(activity);
+        },
         pushToStudio: (service) => engine.pushToStudio(service),
         requestPull: (service) => engine.requestPull(service),
         broadcastToClients: (role, payload) => websocketRuntime?.broadcastToRole(role, payload) ?? 0,
@@ -221,6 +224,9 @@ export function registerWatchCommand(program: Command): void {
           renameFromStudio: async (oldPath, newPath) => {
             await engine.handleStudioRename(oldPath, newPath);
             await persistRuntimeState();
+          },
+          noteEditorActivity: (activity) => {
+            engine.noteEditorActivity(activity);
           },
           pushToStudio: (service) => engine.pushToStudio(service),
           requestPull: (service) => engine.requestPull(service),

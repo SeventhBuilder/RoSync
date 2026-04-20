@@ -72,6 +72,14 @@ Then in Roblox Studio:
 
 Changes in Studio now sync to `src/` on disk. Changes to files in VSCode sync back to Studio.
 
+The Studio plugin now includes a scrollable **Sync Activity** feed instead of a plain text log. Mutation rows are source-labeled and color-coded:
+
+- `[Studio] + Add Workspace/Part`
+- `[VSCode] ~ Update ServerScriptService/GameManager`
+- `[Studio] - Remove ReplicatedStorage/OldEvent`
+
+`rosync watch` mirrors the same high-level mutations in the terminal with green `+ Add`, yellow `~ Update` / `~ Rename`, and red `- Remove` action tokens.
+
 ---
 
 ## CLI Reference

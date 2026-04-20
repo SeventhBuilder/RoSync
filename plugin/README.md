@@ -54,3 +54,23 @@ To test the current foundation in Studio:
 2. Open Roblox Studio
 3. Open the RoSync plugin
 4. Connect to `http://127.0.0.1:34872`
+
+The plugin dashboard now has eight actions across two rows:
+
+- `Connect`
+- `Start Watch`
+- `Push All`
+- `Pull All`
+- `Push Selection`
+- `Status`
+- `Refresh`
+- `Disconnect`
+
+The bottom panel is a real scrollable **Sync Activity** feed. It shows:
+
+- green `+ Add`
+- yellow `~ Update` and `~ Rename`
+- red `- Remove`
+- source labels like `[Studio]`, `[VSCode]`, and `[Disk]`
+
+The same mutation summaries are also mirrored into Studio Output for debugging.

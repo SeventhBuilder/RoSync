@@ -85,12 +85,13 @@ interface NodeResponse {
 interface HealthResponse extends DaemonHealth {}
 
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
+export type DaemonOrigin = "studio" | "editor" | "disk";
 
 export type DaemonEvent =
   | { type: "WELCOME"; schemaVersion: string | null }
-  | { type: "SYNC_INSTANCE"; path: string; data: Record<string, unknown> }
-  | { type: "REMOVE_INSTANCE"; path: string }
-  | { type: "RENAME_INSTANCE"; oldPath: string; newPath: string }
+  | { type: "SYNC_INSTANCE"; path: string; data: Record<string, unknown>; origin?: DaemonOrigin }
+  | { type: "REMOVE_INSTANCE"; path: string; origin?: DaemonOrigin }
+  | { type: "RENAME_INSTANCE"; oldPath: string; newPath: string; origin?: DaemonOrigin }
   | { type: "CONFLICT"; conflict: DaemonConflict & { local?: unknown; remote?: unknown } }
   | { type: "ERROR"; code: string | null; message: string }
   | { type: "CONNECTION_STATE"; state: ConnectionState; endpoint: DaemonEndpoint | null };
@@ -201,6 +202,22 @@ export class DaemonClient implements vscode.Disposable {
     });
   }
 
+  public reportEditorActivity(activity: {
+    action: "add" | "update" | "remove" | "rename";
+    path?: string;
+    oldPath?: string;
+    newPath?: string;
+  }): void {
+    this.sendMessage({
+      type: "EDITOR_ACTIVITY",
+      client: "vscode",
+      action: activity.action,
+      path: activity.path,
+      oldPath: activity.oldPath,
+      newPath: activity.newPath,
+    });
+  }
+
   private async connect(nextState: ConnectionState): Promise<void> {
     if (this.disposed) {
       return;
@@ -297,6 +314,7 @@ export class DaemonClient implements vscode.Disposable {
             type: "SYNC_INSTANCE",
             path: payload.path,
             data: payload.data as Record<string, unknown>,
+            origin: payload.origin === "studio" || payload.origin === "editor" || payload.origin === "disk" ? payload.origin : undefined,
           });
         }
         return;
@@ -305,6 +323,7 @@ export class DaemonClient implements vscode.Disposable {
           this.onDidReceiveEventEmitter.fire({
             type: "REMOVE_INSTANCE",
             path: payload.path,
+            origin: payload.origin === "studio" || payload.origin === "editor" || payload.origin === "disk" ? payload.origin : undefined,
           });
         }
         return;
@@ -314,6 +333,7 @@ export class DaemonClient implements vscode.Disposable {
             type: "RENAME_INSTANCE",
             oldPath: payload.oldPath,
             newPath: payload.newPath,
+            origin: payload.origin === "studio" || payload.origin === "editor" || payload.origin === "disk" ? payload.origin : undefined,
           });
         }
         return;
@@ -344,5 +364,13 @@ export class DaemonClient implements vscode.Disposable {
       default:
         return;
     }
+  }
+
+  private sendMessage(payload: Record<string, unknown>): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.socket.send(JSON.stringify(payload));
   }
 }

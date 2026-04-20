@@ -26,3 +26,17 @@ While `watch` is running, the daemon also exposes:
 - `POST /api/node`
 - `PATCH /api/node`
 - `DELETE /api/node`
+
+The default `rosync watch` terminal also prints high-level sync activity:
+
+- `[Studio] + Add Workspace/Part`
+- `[VSCode] ~ Update ServerScriptService/GameManager`
+- `[Studio] - Remove Workspace/OldPart`
+
+Action colors are consistent with the Studio plugin feed:
+
+- green for `+ Add`
+- yellow for `~ Update` and `~ Rename`
+- red for `- Remove`
+
+Use `rosync watch --verbose` when you also want lower-level file watcher noise from `chokidar`.
