@@ -161,7 +161,25 @@ function Listener.attach(shouldSync, callbacks, options)
 			scheduleChanged(instance)
 		end)
 		nameChangedConnections[instance] = instance:GetPropertyChangedSignal("Name"):Connect(function()
-			scheduleChanged(instance)
+			if not Listener.isSyncAllowed() then
+				return
+			end
+
+			local previousPath = lastKnownPaths[instance]
+			local currentPath = PathUtil.getInstancePath(instance)
+			lastKnownPaths[instance] = currentPath
+
+			if not previousPath or previousPath == currentPath then
+				return
+			end
+
+			if not Listener.shouldSyncInstance(instance, shouldSync) then
+				return
+			end
+
+			if callbacks.onRenamed then
+				callbacks.onRenamed(instance, previousPath, currentPath)
+			end
 		end)
 	end
 

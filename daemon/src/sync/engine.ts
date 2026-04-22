@@ -676,7 +676,31 @@ export class SyncEngine {
     }
 
     await this.hooks.moveProjectNode(oldPath, newPath);
-    await this.reconcileDiskTree("studio");
+
+    const nextTree = await this.hooks.rebuildProjectTree();
+    const operation: SyncOperation = {
+      type: "RENAME_INSTANCE",
+      oldPath,
+      newPath,
+    };
+
+    this.currentTree = nextTree;
+    this.summary = summarizeProjectTree(nextTree);
+    this.reindexRecords();
+    this.registerPendingDiskEcho(operation);
+    this.hooks.logger.info(
+      formatSyncActivityLine(
+        "studio",
+        {
+          action: "rename",
+          path: oldPath,
+          nextPath: newPath,
+        },
+        true,
+      ),
+    );
+    this.broadcastOperation(operation, "studio", "studio");
+    this.refreshDiagnostics();
   }
 
   public pushToStudio(service?: string): number {

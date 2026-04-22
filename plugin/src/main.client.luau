@@ -953,7 +953,7 @@ local function startWatch()
 		onRenamed = function(instance, oldPath, newPath)
 			local serialized = Serializer.serializeInstance(instance, true)
 			local sent = sendMessage({
-				type = "RENAME_INSTANCE",
+				type = "INSTANCE_RENAMED",
 				oldPath = oldPath,
 				newPath = newPath,
 				data = serialized,
