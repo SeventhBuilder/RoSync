@@ -264,7 +264,7 @@ local function daemonIndexedInstanceCount(statusResponse)
 end
 
 local function writeStudioOutput(message, level)
-	local formatted = "[RoSync Plugin] " .. tostring(message)
+	local formatted = "[RoSync] " .. tostring(message)
 	if level == "error" then
 		warn(formatted)
 	else
