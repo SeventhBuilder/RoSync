@@ -71,7 +71,7 @@ function installScriptForPlatform(sourceDir: string, platform: NodeJS.Platform):
   }
 
   if (platform === "darwin") {
-    return path.join(sourceDir, "install", "macos", "install.sh");
+    return path.join(sourceDir, "install", "Mac", "install.sh");
   }
 
   return path.join(sourceDir, "install", "linux", "install.sh");
@@ -83,7 +83,7 @@ function uninstallScriptForPlatform(sourceDir: string, platform: NodeJS.Platform
   }
 
   if (platform === "darwin") {
-    return path.join(sourceDir, "install", "macos", "uninstall.sh");
+    return path.join(sourceDir, "install", "Mac", "uninstall.sh");
   }
 
   return path.join(sourceDir, "install", "linux", "uninstall.sh");

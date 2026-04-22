@@ -5,7 +5,6 @@ This folder contains the new RoSync Studio plugin source tree.
 The current foundation scaffolds the DockWidget entry point and the module layout from the target architecture so the implementation can grow cleanly:
 
 - `src/main.client.luau`
-- `src/ui/`
 - `src/network/`
 - `src/sync/`
 - `src/util/`
@@ -32,8 +31,8 @@ For Unix shells, the install scripts can be run from either `bash` or `zsh`:
 ```bash
 bash install/linux/install.sh
 zsh install/linux/install.sh
-bash install/macos/install.sh
-zsh install/macos/install.sh
+bash install/Mac/install.sh
+zsh install/Mac/install.sh
 ```
 
 ## Build A Testable Plugin File
@@ -55,22 +54,20 @@ To test the current foundation in Studio:
 3. Open the RoSync plugin
 4. Connect to `http://127.0.0.1:34872`
 
-The plugin dashboard now has eight actions across two rows:
+The plugin dashboard now has a single connection toggle and three action buttons:
 
-- `Connect`
-- `Start Watch`
+- `Connect` / `Disconnect`
 - `Push All`
 - `Pull All`
-- `Push Selection`
 - `Status`
-- `Refresh`
-- `Disconnect`
 
 The bottom panel is a real scrollable **Sync Activity** feed. It shows:
 
 - green `+ Add`
-- yellow `~ Update` and `~ Rename`
+- yellow `~ Update`
+- white rename entries
+- blue move entries
 - red `- Remove`
 - source labels like `[Studio]`, `[VSCode]`, and `[Disk]`
 
-The same mutation summaries are also mirrored into Studio Output for debugging.
+Normal sync mutation summaries stay in the plugin panel. Studio Output is reserved for startup, connection lifecycle events, and actual errors.

@@ -53,8 +53,8 @@ META_DIR="$HOME/.rosync-meta"
 INSTALL_PATH_FILE="$META_DIR/install-path"
 INSTALL_METADATA_FILE="$META_DIR/install.json"
 DAEMON_ENTRY="$REPO_ROOT/daemon/dist/main.js"
-INSTALL_SCRIPT="$REPO_ROOT/install/macos/install.sh"
-UNINSTALL_SCRIPT="$REPO_ROOT/install/macos/uninstall.sh"
+INSTALL_SCRIPT="$REPO_ROOT/install/Mac/install.sh"
+UNINSTALL_SCRIPT="$REPO_ROOT/install/Mac/uninstall.sh"
 EXTENSION_ID="rosync.rosync-extension"
 
 write_step() {

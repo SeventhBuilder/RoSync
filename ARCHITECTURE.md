@@ -45,7 +45,7 @@ The config loader rejects any non-loopback host so the daemon cannot be bound to
 Source installs are tracked with platform-local metadata:
 
 - Windows: `%LOCALAPPDATA%\RoSync\meta`
-- macOS/Linux: `~/.rosync-meta`
+- Mac/Linux: `~/.rosync-meta`
 
 That metadata records the linked source checkout, CLI launcher paths, plugin install path, and uninstall script path. `rosync update` uses it to rebuild in place and refresh shims safely with `.bak` backups, while `rosync uninstall` delegates to the platform uninstall script and leaves linked development checkouts untouched.
 

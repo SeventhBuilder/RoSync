@@ -17,7 +17,7 @@ Built on TypeScript, runs entirely on localhost. No cloud, no relay server.
 - **VSCode Explorer** — browse your full Roblox DataModel tree inside VSCode with Roblox-style class icons
 - **Multi-place support** — manage multiple Roblox places in one project
 - **Git integration** — auto-commit sync events, track changes over time
-- **Cross-platform** — Windows, macOS, and Linux
+- **Cross-platform** — Windows, Mac, and Linux
 
 ---
 
@@ -36,11 +36,11 @@ cd RoSync
 powershell -ExecutionPolicy Bypass -File .\install\windows\install.ps1
 ```
 
-### macOS
+### Mac
 ```bash
 git clone https://github.com/SeventhBuilder/RoSync.git
 cd RoSync
-bash install/macos/install.sh
+bash install/Mac/install.sh
 ```
 
 ### Linux

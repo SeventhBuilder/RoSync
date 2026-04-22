@@ -7,8 +7,10 @@
 - Core sync engine foundation: granular disk diffs, subtree rename detection, outbound echo suppression, runtime diagnostics, and conflict records exist in the daemon; verified by `daemon/tests/sync_engine.test.ts`.
 - Studio plugin transport foundation: HTTP health checks, WebSocket connect/reconnect, polling fallback, push/pull commands, and a scrollable sync activity feed exist in the Studio plugin source and bundled plugin artifact.
 - VS Code live client foundation: the extension connects over WebSocket, shows Explorer and Sync Status sidebars, updates incrementally from daemon events, and tracks connection state in the status bar.
-- Installer/update metadata foundation: Windows, macOS, and Linux source installers plus uninstall/update metadata flows exist in the repo and were carried through the audit as implemented foundations.
+- Installer/update metadata foundation: Windows, Mac, and Linux source installers plus uninstall/update metadata flows exist in the repo.
 - `rosync init` now scaffolds `TextChatService/` by default alongside the standard service folders in `src/`.
+- Plugin source cleanup: unused plugin UI stubs were removed from `plugin/src/ui/`, the unused `plugin/src/util/SchemaUtil.luau` module was deleted, and the bundled plugin was rebuilt without dead modules.
+- Repo cleanup: `AUDIT.md` has been retired in favor of `STATE.md` as the living implementation-status document, and `examples/dev-project/.rosync/runtime.json` is no longer tracked because it is machine-local runtime state.
 
 ## 🔴 Known Broken
 - First Connect wipes Studio instances: the non-destructive connect fix is now committed and pushed in `plugin/src/main.client.luau` and `plugin/src/sync/Deserializer.luau`, but manual Studio verification is still pending before this can move to ✅ working.

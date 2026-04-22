@@ -14,14 +14,12 @@ __root.sync.Listener = { Name = 'Listener', Parent = __root.sync }
 __root.sync.Serializer = { Name = 'Serializer', Parent = __root.sync }
 __root.util = { Name = 'util', Parent = __root }
 __root.util.PathUtil = { Name = 'PathUtil', Parent = __root.util }
-__root.util.SchemaUtil = { Name = 'SchemaUtil', Parent = __root.util }
 __root.network.HttpClient.__moduleId = 'network/HttpClient'
 __root.network.WebSocketClient.__moduleId = 'network/WebSocketClient'
 __root.sync.Listener.__moduleId = 'sync/Listener'
 __root.sync.Serializer.__moduleId = 'sync/Serializer'
 __root.sync.Deserializer.__moduleId = 'sync/Deserializer'
 __root.util.PathUtil.__moduleId = 'util/PathUtil'
-__root.util.SchemaUtil.__moduleId = 'util/SchemaUtil'
 
 local function __require(target)
 	local moduleId = type(target) == 'table' and target.__moduleId or target
@@ -32,7 +30,7 @@ local function __require(target)
 	if not loader then
 		error('Unknown bundled module: ' .. tostring(moduleId))
 	end
-	local moduleScript = moduleId == 'main.client' and script or (moduleId == 'network/HttpClient' and __root.network.HttpClient) or (moduleId == 'network/WebSocketClient' and __root.network.WebSocketClient) or (moduleId == 'sync/Listener' and __root.sync.Listener) or (moduleId == 'sync/Serializer' and __root.sync.Serializer) or (moduleId == 'sync/Deserializer' and __root.sync.Deserializer) or (moduleId == 'util/PathUtil' and __root.util.PathUtil) or (moduleId == 'util/SchemaUtil' and __root.util.SchemaUtil) or script
+	local moduleScript = moduleId == 'main.client' and script or (moduleId == 'network/HttpClient' and __root.network.HttpClient) or (moduleId == 'network/WebSocketClient' and __root.network.WebSocketClient) or (moduleId == 'sync/Listener' and __root.sync.Listener) or (moduleId == 'sync/Serializer' and __root.sync.Serializer) or (moduleId == 'sync/Deserializer' and __root.sync.Deserializer) or (moduleId == 'util/PathUtil' and __root.util.PathUtil) or script
 	local result = loader(__require, moduleScript)
 	if result == nil then
 		result = true
@@ -2500,68 +2498,6 @@ __modules['util/PathUtil'] = function(moduleRequire, script)
 	end
 	
 	return PathUtil
-	
-end
-
-__modules['util/SchemaUtil'] = function(moduleRequire, script)
-	local require = moduleRequire
-	local ReflectionService = game:GetService("ReflectionService")
-	
-	local SchemaUtil = {}
-	local PROPERTY_DENYLIST = {
-		Parent = true,
-		Name = true,
-		ClassName = true,
-		Source = true,
-		LinkedSource = true,
-		ScriptGuid = true,
-		Tags = true,
-		Attributes = true,
-		AttributesReplicate = true,
-		AttributesSerialize = true,
-		DataCost = true,
-		UniqueId = true,
-		HistoryId = true,
-		Capabilities = true,
-		DefinesCapabilities = true,
-		numExpectedDirectChildren = true,
-		Children = true,
-	}
-	
-	local propertyCache = {}
-	
-	function SchemaUtil.getSyncableProperties(className)
-		if propertyCache[className] ~= nil then
-			return propertyCache[className]
-		end
-	
-		local properties = {}
-		local success, reflectedProperties = pcall(function()
-			return ReflectionService:GetPropertiesOfClass(className, {
-				ExcludeInherited = false,
-				ExcludeDisplay = false,
-			})
-		end)
-	
-		if success and type(reflectedProperties) == "table" then
-			for _, property in ipairs(reflectedProperties) do
-				local propertyName = property.Name
-				local permits = property.Permits
-				local canRead = permits == nil or permits.Read ~= nil or permits.ReadParallel ~= nil
-				local canWrite = permits == nil or permits.Write ~= nil or permits.WriteParallel ~= nil
-	
-				if type(propertyName) == "string" and property.Serialized ~= false and canRead and canWrite and not PROPERTY_DENYLIST[propertyName] then
-					table.insert(properties, propertyName)
-				end
-			end
-		end
-	
-		table.sort(properties)
-		propertyCache[className] = properties
-		return properties
-	end
-	
-	return SchemaUtil
 	
 end
 

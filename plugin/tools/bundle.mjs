@@ -14,7 +14,6 @@ const moduleEntries = [
   ["sync/Serializer", "sync/Serializer.luau"],
   ["sync/Deserializer", "sync/Deserializer.luau"],
   ["util/PathUtil", "util/PathUtil.luau"],
-  ["util/SchemaUtil", "util/SchemaUtil.luau"],
 ];
 
 function luaQuote(text) {

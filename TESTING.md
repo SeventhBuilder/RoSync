@@ -39,6 +39,6 @@ For local manual dogfooding, use `examples/dev-project/` as the RoSync project r
 - [ ] The editor extension foundation activates and shows RoSync views (current implementation: VS Code)
 - [ ] Roblox Studio plugin builds and opens its dock widget
 - [ ] `install/windows/install.ps1` copies the plugin into `%LOCALAPPDATA%\Roblox\Plugins`
-- [ ] `install/macos/install.sh` writes a `~/.local/bin/rosync` shim and `~/.rosync-meta/install.json`
+- [ ] `install/Mac/install.sh` writes a `~/.local/bin/rosync` shim and `~/.rosync-meta/install.json`
 - [ ] `install/linux/install.sh` writes a `~/.local/bin/rosync` shim and `~/.rosync-meta/install.json`
 - [ ] The installed plugin connects to `http://127.0.0.1:34872`
