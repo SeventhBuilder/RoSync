@@ -2,7 +2,11 @@ local RunService = game:GetService("RunService")
 local PathUtil = require(script.Parent.Parent.util.PathUtil)
 
 local Listener = {}
-local DEFAULT_DEBOUNCE_SECONDS = 0.15
+local DEBOUNCE_MS = {
+	default = 150,
+	script = 1500,
+	camera = 99999,
+}
 
 local READ_ONLY_INSTANCES = {
 	["Workspace/Camera"] = true,
@@ -51,6 +55,30 @@ local function isBlockedService(instance)
 	return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
 end
 
+local function getDebounceMs(instance, propertyName)
+	if instance:IsA("LuaSourceContainer") and propertyName == "Source" then
+		return DEBOUNCE_MS.script
+	end
+
+	if instance.ClassName == "Camera" then
+		return DEBOUNCE_MS.camera
+	end
+
+	return DEBOUNCE_MS.default
+end
+
+local function safeReadSource(instance)
+	local success, value = pcall(function()
+		return instance.Source
+	end)
+
+	if success and type(value) == "string" then
+		return value
+	end
+
+	return nil
+end
+
 function Listener.isReadOnlyInstance(instance)
 	if instance == nil then
 		return false
@@ -93,11 +121,8 @@ function Listener.attach(shouldSync, callbacks, options)
 	local nameChangedConnections = {}
 	local lastKnownPaths = {}
 	local pendingThreads = {}
-
-	local debounceSeconds = DEFAULT_DEBOUNCE_SECONDS
-	if type(options) == "table" and type(options.debounceSeconds) == "number" then
-		debounceSeconds = options.debounceSeconds
-	end
+	local pendingProperties = {}
+	local lastSentSource = {}
 
 	local function cancelPending(instance)
 		local thread = pendingThreads[instance]
@@ -105,6 +130,7 @@ function Listener.attach(shouldSync, callbacks, options)
 			task.cancel(thread)
 			pendingThreads[instance] = nil
 		end
+		pendingProperties[instance] = nil
 	end
 
 	local function disconnectChanged(instance)
@@ -121,11 +147,14 @@ function Listener.attach(shouldSync, callbacks, options)
 		end
 	end
 
-	local function scheduleChanged(instance)
+	local function scheduleChanged(instance, propertyName)
 		cancelPending(instance)
+		pendingProperties[instance] = propertyName
 
-		pendingThreads[instance] = task.delay(debounceSeconds, function()
+		pendingThreads[instance] = task.delay(getDebounceMs(instance, propertyName) / 1000, function()
 			pendingThreads[instance] = nil
+			local pendingProperty = pendingProperties[instance]
+			pendingProperties[instance] = nil
 			local currentPath = PathUtil.getInstancePath(instance)
 			if not Listener.shouldSyncInstance(instance, shouldSync) then
 				lastKnownPaths[instance] = currentPath
@@ -134,10 +163,19 @@ function Listener.attach(shouldSync, callbacks, options)
 
 			local previousPath = lastKnownPaths[instance]
 
+			if pendingProperty == "Source" and instance:IsA("LuaSourceContainer") then
+				local newSource = safeReadSource(instance)
+				if newSource == nil or lastSentSource[instance] == newSource then
+					lastKnownPaths[instance] = currentPath
+					return
+				end
+				lastSentSource[instance] = newSource
+			end
+
 			if previousPath and currentPath ~= previousPath and callbacks.onRenamed then
 				callbacks.onRenamed(instance, previousPath, currentPath)
 			elseif callbacks.onChanged then
-				callbacks.onChanged(instance)
+				callbacks.onChanged(instance, pendingProperty)
 			end
 
 			lastKnownPaths[instance] = currentPath
@@ -158,7 +196,7 @@ function Listener.attach(shouldSync, callbacks, options)
 			if propertyName == "Name" then
 				return
 			end
-			scheduleChanged(instance)
+			scheduleChanged(instance, propertyName)
 		end)
 		nameChangedConnections[instance] = instance:GetPropertyChangedSignal("Name"):Connect(function()
 			if not Listener.isSyncAllowed() then
@@ -186,6 +224,7 @@ function Listener.attach(shouldSync, callbacks, options)
 	local function unwatchInstance(instance)
 		disconnectChanged(instance)
 		lastKnownPaths[instance] = nil
+		lastSentSource[instance] = nil
 	end
 
 	local function onAdded(instance)
@@ -227,8 +266,14 @@ function Listener.attach(shouldSync, callbacks, options)
 			task.cancel(pendingThread)
 			pendingThreads[instance] = nil
 		end
+		for instance in pairs(pendingProperties) do
+			pendingProperties[instance] = nil
+		end
 		for instance in pairs(lastKnownPaths) do
 			lastKnownPaths[instance] = nil
+		end
+		for instance in pairs(lastSentSource) do
+			lastSentSource[instance] = nil
 		end
 	end
 end

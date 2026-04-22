@@ -44,14 +44,14 @@ end
 __modules['main.client'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local HttpService = game:GetService("HttpService")
-
+	
 	local HttpClient = require(script.Parent.network.HttpClient)
 	local WebSocketClient = require(script.Parent.network.WebSocketClient)
 	local Deserializer = require(script.Parent.sync.Deserializer)
 	local Listener = require(script.Parent.sync.Listener)
 	local Serializer = require(script.Parent.sync.Serializer)
 	local PathUtil = require(script.Parent.util.PathUtil)
-
+	
 	local DEFAULT_SERVER_URL = "http://127.0.0.1:34872"
 	local SERVICE_NAMES = {
 		"Workspace",
@@ -67,10 +67,10 @@ __modules['main.client'] = function(moduleRequire, script)
 		"Lighting",
 		"SoundService",
 	}
-
+	
 	local toolbar = plugin:CreateToolbar("RoSync")
 	local button = toolbar:CreateButton("RoSync", "Open the RoSync panel", "")
-
+	
 	local widgetInfo = DockWidgetPluginGuiInfo.new(
 		Enum.InitialDockState.Right,
 		false,
@@ -80,10 +80,10 @@ __modules['main.client'] = function(moduleRequire, script)
 		360,
 		500
 	)
-
+	
 	local widget = plugin:CreateDockWidgetPluginGui("RoSyncDock", widgetInfo)
 	widget.Title = "RoSync"
-
+	
 	local ROOT_COLOR = Color3.fromRGB(18, 18, 28)
 	local HEADER_COLOR = Color3.fromRGB(24, 24, 38)
 	local PANEL_COLOR = Color3.fromRGB(28, 28, 42)
@@ -97,7 +97,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	local PUSH_ORANGE = Color3.fromRGB(249, 115, 22)
 	local PULL_PURPLE = Color3.fromRGB(168, 85, 247)
 	local STATUS_GRAY = Color3.fromRGB(107, 114, 128)
-
+	
 	local EVENT_COLOR = {
 		add = "rgb(34,197,94)",
 		update = "rgb(234,179,8)",
@@ -108,7 +108,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		source = "rgb(148,163,184)",
 		path = "rgb(241,245,249)",
 	}
-
+	
 	local EVENT_PREFIX = {
 		add = "+",
 		update = "~",
@@ -117,26 +117,26 @@ __modules['main.client'] = function(moduleRequire, script)
 		info = "·",
 		error = "!",
 	}
-
+	
 	local function escapeRichText(value)
 		value = string.gsub(tostring(value), "&", "&amp;")
 		value = string.gsub(value, "<", "&lt;")
 		value = string.gsub(value, ">", "&gt;")
 		return value
 	end
-
+	
 	local root = Instance.new("Frame")
 	root.Size = UDim2.fromScale(1, 1)
 	root.BackgroundColor3 = ROOT_COLOR
 	root.BorderSizePixel = 0
 	root.Parent = widget
-
+	
 	local function applyCorner(instance)
 		local corner = Instance.new("UICorner")
 		corner.CornerRadius = UDim.new(0, 6)
 		corner.Parent = instance
 	end
-
+	
 	local function createButton(parent, text, color, position, size)
 		local actionButton = Instance.new("TextButton")
 		actionButton.Position = position
@@ -152,13 +152,13 @@ __modules['main.client'] = function(moduleRequire, script)
 		applyCorner(actionButton)
 		return actionButton
 	end
-
+	
 	local headerBar = Instance.new("Frame")
 	headerBar.Size = UDim2.new(1, 0, 0, 36)
 	headerBar.BackgroundColor3 = HEADER_COLOR
 	headerBar.BorderSizePixel = 0
 	headerBar.Parent = root
-
+	
 	local titleLabel = Instance.new("TextLabel")
 	titleLabel.Size = UDim2.new(0, 180, 1, 0)
 	titleLabel.Position = UDim2.new(0, 12, 0, 0)
@@ -169,18 +169,18 @@ __modules['main.client'] = function(moduleRequire, script)
 	titleLabel.TextSize = 18
 	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 	titleLabel.Parent = headerBar
-
+	
 	local statusPill = Instance.new("Frame")
 	statusPill.Size = UDim2.new(0, 126, 0, 30)
 	statusPill.Position = UDim2.new(1, -138, 0, 3)
 	statusPill.BackgroundColor3 = STATUS_DISCONNECTED
 	statusPill.BorderSizePixel = 0
 	statusPill.Parent = headerBar
-
+	
 	local statusPillCorner = Instance.new("UICorner")
 	statusPillCorner.CornerRadius = UDim.new(0, 999)
 	statusPillCorner.Parent = statusPill
-
+	
 	local statusLabel = Instance.new("TextLabel")
 	statusLabel.Size = UDim2.fromScale(1, 1)
 	statusLabel.BackgroundTransparency = 1
@@ -189,13 +189,13 @@ __modules['main.client'] = function(moduleRequire, script)
 	statusLabel.TextColor3 = TEXT_PRIMARY
 	statusLabel.TextSize = 12
 	statusLabel.Parent = statusPill
-
+	
 	local controlsFrame = Instance.new("Frame")
 	controlsFrame.Size = UDim2.new(1, -24, 0, 80)
 	controlsFrame.Position = UDim2.new(0, 12, 0, 48)
 	controlsFrame.BackgroundTransparency = 1
 	controlsFrame.Parent = root
-
+	
 	local connectToggleButton = createButton(
 		controlsFrame,
 		"▶ Connect",
@@ -203,18 +203,18 @@ __modules['main.client'] = function(moduleRequire, script)
 		UDim2.new(0, 0, 0, 0),
 		UDim2.new(1, 0, 0, 34)
 	)
-
+	
 	local rowFrame = Instance.new("Frame")
 	rowFrame.Size = UDim2.new(1, 0, 0, 34)
 	rowFrame.Position = UDim2.new(0, 0, 0, 46)
 	rowFrame.BackgroundTransparency = 1
 	rowFrame.Parent = controlsFrame
-
+	
 	local rowLayout = Instance.new("UIListLayout")
 	rowLayout.FillDirection = Enum.FillDirection.Horizontal
 	rowLayout.Padding = UDim.new(0, 8)
 	rowLayout.Parent = rowFrame
-
+	
 	local pushAllButton = createButton(
 		rowFrame,
 		"↑ Push All",
@@ -236,7 +236,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		UDim2.new(),
 		UDim2.new(1/3, -5, 1, 0)
 	)
-
+	
 	local logFeed = Instance.new("Frame")
 	logFeed.Size = UDim2.new(1, -24, 1, -140)
 	logFeed.Position = UDim2.new(0, 12, 0, 140)
@@ -244,13 +244,13 @@ __modules['main.client'] = function(moduleRequire, script)
 	logFeed.BorderSizePixel = 0
 	logFeed.Parent = root
 	applyCorner(logFeed)
-
+	
 	local logStroke = Instance.new("UIStroke")
 	logStroke.Color = PANEL_BORDER
 	logStroke.Thickness = 1
 	logStroke.Transparency = 0.15
 	logStroke.Parent = logFeed
-
+	
 	local logScrollFrame = Instance.new("ScrollingFrame")
 	logScrollFrame.Size = UDim2.new(1, 0, 1, 0)
 	logScrollFrame.BackgroundTransparency = 1
@@ -260,18 +260,18 @@ __modules['main.client'] = function(moduleRequire, script)
 	logScrollFrame.ScrollBarThickness = 4
 	logScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 116, 139)
 	logScrollFrame.Parent = logFeed
-
+	
 	local logLayout = Instance.new("UIListLayout")
 	logLayout.Padding = UDim.new(0, 6)
 	logLayout.Parent = logScrollFrame
-
+	
 	local logPadding = Instance.new("UIPadding")
 	logPadding.PaddingTop = UDim.new(0, 10)
 	logPadding.PaddingBottom = UDim.new(0, 10)
 	logPadding.PaddingLeft = UDim.new(0, 10)
 	logPadding.PaddingRight = UDim.new(0, 10)
 	logPadding.Parent = logScrollFrame
-
+	
 	local clientId = HttpService:GenerateGUID(false)
 	local httpClient = HttpClient.new(DEFAULT_SERVER_URL)
 	local socketClient = nil
@@ -286,25 +286,25 @@ __modules['main.client'] = function(moduleRequire, script)
 	local connectSocket
 	local pushServices
 	local statusMode = "disconnected"
-
+	
 	local function daemonIndexedInstanceCount(statusResponse)
 		if type(statusResponse) ~= "table" then
 			return nil
 		end
-
+	
 		local summary = statusResponse.summary
 		if type(summary) == "table" and type(summary.indexedInstances) == "number" then
 			return summary.indexedInstances
 		end
-
+	
 		local runtime = statusResponse.runtime
 		if type(runtime) == "table" and type(runtime.summary) == "table" and type(runtime.summary.indexedInstances) == "number" then
 			return runtime.summary.indexedInstances
 		end
-
+	
 		return nil
 	end
-
+	
 	local function writeOutput(message, level)
 		local formatted = "[RoSync Plugin] " .. tostring(message)
 		if level == "warn" or level == "error" then
@@ -313,24 +313,24 @@ __modules['main.client'] = function(moduleRequire, script)
 			print(formatted)
 		end
 	end
-
+	
 	local function originLabel(origin)
 		if origin == "studio" then
 			return "Studio"
 		elseif origin == "editor" then
 			return "VSCode"
 		end
-
+	
 		return "Disk"
 	end
-
+	
 	local function scrollLogToBottom()
 		task.defer(function()
 			local maxPosition = math.max(0, logScrollFrame.AbsoluteCanvasSize.Y - logScrollFrame.AbsoluteWindowSize.Y)
 			logScrollFrame.CanvasPosition = Vector2.new(0, maxPosition)
 		end)
 	end
-
+	
 	local function appendLogEntry(richText, plainText, level)
 		local entry = Instance.new("TextLabel")
 		entry.Size = UDim2.new(1, -2, 0, 0)
@@ -345,11 +345,11 @@ __modules['main.client'] = function(moduleRequire, script)
 		entry.TextXAlignment = Enum.TextXAlignment.Left
 		entry.TextYAlignment = Enum.TextYAlignment.Top
 		entry.Parent = logScrollFrame
-
+	
 		writeOutput(plainText, level)
 		scrollLogToBottom()
 	end
-
+	
 	local function appendInfo(message, level)
 		local isError = level == "warn" or level == "error"
 		local prefix = isError and EVENT_PREFIX.error or EVENT_PREFIX.info
@@ -365,7 +365,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		local plainText = string.format("%s %s", prefix, tostring(message))
 		appendLogEntry(richText, plainText, level)
 	end
-
+	
 	local function appendEvent(origin, action, pathValue, extraPath)
 		local eventType = EVENT_PREFIX[action] and action or "update"
 		local source = originLabel(origin)
@@ -384,39 +384,39 @@ __modules['main.client'] = function(moduleRequire, script)
 		local plainText = string.format("%s [%s] %s", actionText, source, fullPath)
 		appendLogEntry(richText, plainText)
 	end
-
+	
 	local appendLog = appendInfo
-
+	
 	local function refreshConnectToggle()
 		if desiredConnection then
 			connectToggleButton.BackgroundColor3 = DISCONNECT_RED
 			connectToggleButton.Text = "⏹ Disconnect"
 			return
 		end
-
+	
 		connectToggleButton.BackgroundColor3 = CONNECT_BLUE
 		connectToggleButton.Text = "▶ Connect"
 	end
-
+	
 	local function setStatus(mode)
 		statusMode = mode
-
+	
 		if mode == "connected" then
 			statusPill.BackgroundColor3 = STATUS_CONNECTED
 			statusLabel.Text = "🟢 Connected"
 			return
 		end
-
+	
 		if mode == "conflict" then
 			statusPill.BackgroundColor3 = STATUS_CONFLICT
 			statusLabel.Text = "🟡 Conflict"
 			return
 		end
-
+	
 		statusPill.BackgroundColor3 = STATUS_DISCONNECTED
 		statusLabel.Text = "🔴 Disconnected"
 	end
-
+	
 	task.spawn(function()
 		while widget.Parent ~= nil do
 			setStatus(statusMode)
@@ -424,145 +424,145 @@ __modules['main.client'] = function(moduleRequire, script)
 			task.wait(2)
 		end
 	end)
-
+	
 	local function appendSyncBlocked()
 		appendInfo("Sync blocked — stop playtest first", "warn")
 	end
-
+	
 	local function isSyncAllowed(actionLabel)
 		if Listener.isSyncAllowed() then
 			return true
 		end
-
+	
 		appendInfo((actionLabel or "Sync") .. " is disabled while Studio is running. Stop playtest and try again.", "warn")
 		return false
 	end
-
+	
 	local function shouldSyncInstance(instance)
 		return Listener.shouldSyncInstance(instance, function(target)
 			return target ~= nil and target ~= game and not applyInProgress
 		end)
 	end
-
+	
 	local function safeGetChildren(instance)
 		local success, children = pcall(function()
 			return instance:GetChildren()
 		end)
 		return (success and type(children) == "table") and children or {}
 	end
-
+	
 	local function serializeSyncTree(instance)
 		if not shouldSyncInstance(instance) then
 			return nil
 		end
-
+	
 		local serialized = Serializer.serializeInstance(instance, false)
 		serialized.children = {}
-
+	
 		for _, child in ipairs(safeGetChildren(instance)) do
 			local childSerialized = serializeSyncTree(child)
 			if childSerialized then
 				table.insert(serialized.children, childSerialized)
 			end
 		end
-
+	
 		return serialized
 	end
-
+	
 	local function currentServerUrl()
 		return DEFAULT_SERVER_URL
 	end
-
+	
 	local function appendConnectionHint()
 		appendLog("Tip: run `rosync watch` first, then use http://127.0.0.1:34872 or the exact host/port printed by the daemon.")
 	end
-
+	
 	local function stopPolling()
 		if pollingThread then
 			task.cancel(pollingThread)
 			pollingThread = nil
 		end
 	end
-
+	
 	local function cancelReconnect()
 		if reconnectThread then
 			task.cancel(reconnectThread)
 			reconnectThread = nil
 		end
 	end
-
+	
 	local function instanceExistsAtPath(pathValue)
 		if type(pathValue) ~= "string" or pathValue == "" then
 			return false
 		end
-
+	
 		local segments = {}
 		for segment in string.gmatch(pathValue, "[^/]+") do
 			table.insert(segments, segment)
 		end
-
+	
 		if #segments == 0 then
 			return false
 		end
-
+	
 		local success, current = pcall(function()
 			return game:GetService(segments[1])
 		end)
 		if not success or not current then
 			return false
 		end
-
+	
 		for index = 2, #segments do
 			current = current:FindFirstChild(segments[index])
 			if not current then
 				return false
 			end
 		end
-
+	
 		return true
 	end
-
+	
 	local function sendMessage(payload)
 		if not socketClient or not socketClient:isConnected() then
 			appendLog("WebSocket is not connected.")
 			return false
 		end
-
+	
 		local success, result = socketClient:send(payload)
 		if not success then
 			appendLog("Send failed: " .. tostring(result))
 		end
 		return success
 	end
-
+	
 	local function fetchAndApplyTree(reason)
 		if refreshInFlight then
 			refreshQueued = true
 			return
 		end
-
+	
 		refreshInFlight = true
 		httpClient:setBaseUrl(currentServerUrl())
-
+	
 		local success, response = httpClient:getTree()
 		if not success then
 			appendLog("Tree fetch failed (" .. tostring(reason) .. "): " .. tostring(response), "warn")
 			refreshInFlight = false
 			return
 		end
-
+	
 		applyInProgress = true
 		local applied, applyError = Deserializer.applyTree(response.tree)
 		applyInProgress = false
-
+	
 		if applied and reason ~= "poll" then
 			appendLog("Applied daemon tree (" .. tostring(reason) .. ").")
 		elseif not applied then
 			appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError), "warn")
 		end
-
+	
 		refreshInFlight = false
-
+	
 		if refreshQueued then
 			refreshQueued = false
 			task.defer(function()
@@ -570,10 +570,10 @@ __modules['main.client'] = function(moduleRequire, script)
 			end)
 		end
 	end
-
+	
 	local function syncAfterHandshake()
 		httpClient:setBaseUrl(currentServerUrl())
-
+	
 		local statusOk, statusResponse = httpClient:request("GET", "/status")
 		if statusOk then
 			local indexedInstances = daemonIndexedInstanceCount(statusResponse)
@@ -585,15 +585,15 @@ __modules['main.client'] = function(moduleRequire, script)
 		elseif statusResponse ~= nil then
 			appendInfo("Status check failed during connect: " .. tostring(statusResponse), "warn")
 		end
-
+	
 		fetchAndApplyTree("welcome")
 	end
-
+	
 	local function startPolling(reason)
 		if pollingThread then
 			return
 		end
-
+	
 		appendLog("HTTP polling active (" .. tostring(reason) .. ").")
 		pollingThread = task.spawn(function()
 			while desiredConnection and (not socketClient or not socketClient:isConnected()) do
@@ -603,12 +603,12 @@ __modules['main.client'] = function(moduleRequire, script)
 			pollingThread = nil
 		end)
 	end
-
+	
 	local function scheduleReconnect()
 		if not desiredConnection or reconnectThread then
 			return
 		end
-
+	
 		local delaySeconds = math.min(30, 2 ^ reconnectAttempt)
 		reconnectAttempt += 1
 		appendLog("Scheduling reconnect in " .. tostring(delaySeconds) .. "s.")
@@ -619,16 +619,16 @@ __modules['main.client'] = function(moduleRequire, script)
 			end
 		end)
 	end
-
+	
 	local function handleSocketMessage(message)
 		local success, payload = pcall(function()
 			return HttpService:JSONDecode(message)
 		end)
-
+	
 		if not success or type(payload) ~= "table" then
 			return
 		end
-
+	
 		if payload.type == "WELCOME" then
 			reconnectAttempt = 0
 			stopPolling()
@@ -636,12 +636,12 @@ __modules['main.client'] = function(moduleRequire, script)
 			syncAfterHandshake()
 			return
 		end
-
+	
 		if payload.type == "PROJECT_TREE" and type(payload.tree) == "table" then
 			applyInProgress = true
 			local applied, applyError = Deserializer.applyTree(payload.tree)
 			applyInProgress = false
-
+	
 			if applied then
 				appendInfo("Applied daemon project tree.")
 			else
@@ -649,23 +649,23 @@ __modules['main.client'] = function(moduleRequire, script)
 			end
 			return
 		end
-
+	
 		if payload.type == "PUSH_REQUEST" then
 			fetchAndApplyTree("push-request")
 			return
 		end
-
+	
 		if payload.type == "PULL_REQUEST" then
 			pushServices()
 			return
 		end
-
+	
 		if payload.type == "SYNC_INSTANCE" and type(payload.path) == "string" and type(payload.data) == "table" then
 			local existedBefore = instanceExistsAtPath(payload.path)
 			applyInProgress = true
 			local applied, applyError = Deserializer.applySyncInstance(payload.path, payload.data)
 			applyInProgress = false
-
+	
 			if applied then
 				appendEvent(payload.origin, existedBefore and "update" or "add", payload.path)
 			else
@@ -673,12 +673,12 @@ __modules['main.client'] = function(moduleRequire, script)
 			end
 			return
 		end
-
+	
 		if payload.type == "REMOVE_INSTANCE" and type(payload.path) == "string" then
 			applyInProgress = true
 			local removed, removeError = Deserializer.removeAtPath(payload.path)
 			applyInProgress = false
-
+	
 			if removed then
 				appendEvent(payload.origin, "remove", payload.path)
 			else
@@ -686,12 +686,12 @@ __modules['main.client'] = function(moduleRequire, script)
 			end
 			return
 		end
-
+	
 		if payload.type == "RENAME_INSTANCE" and type(payload.oldPath) == "string" and type(payload.newPath) == "string" then
 			applyInProgress = true
 			local renamed, renameError = Deserializer.renameAtPath(payload.oldPath, payload.newPath)
 			applyInProgress = false
-
+	
 			if renamed then
 				appendEvent(payload.origin, "rename", payload.oldPath, payload.newPath)
 			else
@@ -699,7 +699,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			end
 			return
 		end
-
+	
 		if payload.type == "FILE_SYSTEM_CHANGED"
 			or payload.type == "INSTANCE_ADDED"
 			or payload.type == "INSTANCE_CHANGED"
@@ -708,22 +708,22 @@ __modules['main.client'] = function(moduleRequire, script)
 			fetchAndApplyTree(payload.type)
 			return
 		end
-
+	
 		if payload.type == "CONFLICT" then
 			setStatus("conflict")
 			appendInfo("Conflict: " .. tostring(payload.reason or payload.path), "warn")
 			return
 		end
-
+	
 		if payload.type == "ERROR" then
 			appendInfo("Daemon error: " .. tostring(payload.message), "warn")
 		end
 	end
-
+	
 	connectSocket = function(isReconnect)
 		httpClient:setBaseUrl(currentServerUrl())
 		cancelReconnect()
-
+	
 		socketClient = WebSocketClient.new(currentServerUrl(), {
 			onOpen = function()
 				appendLog("WebSocket opened.")
@@ -759,7 +759,7 @@ __modules['main.client'] = function(moduleRequire, script)
 				appendLog("WebSocket closed.")
 			end,
 		})
-
+	
 		local connected, errorMessage = socketClient:connect()
 		if not connected then
 			socketClient = nil
@@ -770,7 +770,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			scheduleReconnect()
 			return false
 		end
-
+	
 		stopPolling()
 		local helloSent = sendMessage({
 			type = "HELLO",
@@ -781,63 +781,63 @@ __modules['main.client'] = function(moduleRequire, script)
 		if not helloSent then
 			appendLog("Connected transport, but HELLO could not be sent.", "warn")
 		end
-
+	
 		setStatus("connected")
 		appendLog("Connected to RoSync daemon at " .. currentServerUrl() .. ".")
 		return true
 	end
-
+	
 	local function pushInstance(instance, action, shouldLogEvent)
 		local serialized = serializeSyncTree(instance)
 		if not serialized then
 			return false
 		end
-
+	
 		local instancePath = PathUtil.getInstancePath(instance)
 		local sent = sendMessage({
 			type = "SYNC_INSTANCE",
 			path = instancePath,
 			data = serialized,
 		})
-
+	
 		if sent and shouldLogEvent then
 			appendEvent("studio", action or "update", instancePath)
 		end
-
+	
 		return sent
 	end
-
+	
 	pushServices = function()
 		if not isSyncAllowed("Push All") then
 			return
 		end
-
+	
 		local pushedCount = 0
-
+	
 		for _, serviceName in ipairs(SERVICE_NAMES) do
 			local success, service = pcall(function()
 				return game:GetService(serviceName)
 			end)
-
+	
 			if success and service then
 				pushInstance(service, "update", false)
 				pushedCount += 1
 			end
 		end
-
+	
 		appendLog("Pushed " .. tostring(pushedCount) .. " top-level services to the daemon.")
 	end
-
+	
 	local function startWatch()
 		if not isSyncAllowed("Watch") then
 			return
 		end
-
+	
 		if stopWatching then
 			appendLog("Watch is already running.")
 			return
 		end
-
+	
 		stopWatching = Listener.attach(function(instance)
 			return instance ~= nil and instance ~= game and not applyInProgress
 		end, {
@@ -871,10 +871,10 @@ __modules['main.client'] = function(moduleRequire, script)
 		}, {
 			debounceSeconds = 0.15,
 		})
-
+	
 		appendLog("Studio watch started.")
 	end
-
+	
 	local function stopWatch()
 		if stopWatching then
 			stopWatching()
@@ -882,7 +882,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			appendLog("Studio watch stopped.")
 		end
 	end
-
+	
 	local function disconnectFromDaemon()
 		desiredConnection = false
 		refreshConnectToggle()
@@ -896,18 +896,18 @@ __modules['main.client'] = function(moduleRequire, script)
 		setStatus("disconnected")
 		appendLog("Disconnected from RoSync.")
 	end
-
+	
 	connectToggleButton.MouseButton1Click:Connect(function()
 		if desiredConnection then
 			disconnectFromDaemon()
 			return
 		end
-
+	
 		httpClient:setBaseUrl(currentServerUrl())
 		desiredConnection = true
 		refreshConnectToggle()
 		startWatch()
-
+	
 		local success, response = httpClient:getHealth()
 		if success then
 			appendLog(
@@ -922,27 +922,27 @@ __modules['main.client'] = function(moduleRequire, script)
 			scheduleReconnect()
 		end
 	end)
-
+	
 	pushAllButton.MouseButton1Click:Connect(function()
 		if not Listener.isSyncAllowed() then
 			appendSyncBlocked()
 			return
 		end
-
+	
 		pushServices()
 	end)
-
+	
 	pullAllButton.MouseButton1Click:Connect(function()
 		if not Listener.isSyncAllowed() then
 			appendSyncBlocked()
 			return
 		end
-
+	
 		sendMessage({
 			type = "PULL_REQUEST",
 		})
 	end)
-
+	
 	statusButton.MouseButton1Click:Connect(function()
 		httpClient:setBaseUrl(currentServerUrl())
 		local success, response = httpClient:request("GET", "/status")
@@ -963,24 +963,24 @@ __modules['main.client'] = function(moduleRequire, script)
 			appendLog("Status failed: " .. tostring(response), "warn")
 		end
 	end)
-
+	
 	button.Click:Connect(function()
 		widget.Enabled = not widget.Enabled
 	end)
-
+	
 	refreshConnectToggle()
 	setStatus("disconnected")
 	appendLog("RoSync plugin ready.")
-
+	
 end
 
 __modules['network/HttpClient'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local HttpService = game:GetService("HttpService")
-
+	
 	local HttpClient = {}
 	HttpClient.__index = HttpClient
-
+	
 	local function normalizeBaseUrl(baseUrl)
 		local trimmed = string.gsub(baseUrl or "", "/+$", "")
 		if trimmed == "" then
@@ -989,17 +989,17 @@ __modules['network/HttpClient'] = function(moduleRequire, script)
 		trimmed = string.gsub(trimmed, "://localhost", "://127.0.0.1")
 		return trimmed
 	end
-
+	
 	function HttpClient.new(baseUrl)
 		local self = setmetatable({}, HttpClient)
 		self.baseUrl = normalizeBaseUrl(baseUrl)
 		return self
 	end
-
+	
 	function HttpClient:setBaseUrl(baseUrl)
 		self.baseUrl = normalizeBaseUrl(baseUrl)
 	end
-
+	
 	function HttpClient:request(method, route, payload)
 		local request = {
 			Url = self.baseUrl .. route,
@@ -1008,23 +1008,23 @@ __modules['network/HttpClient'] = function(moduleRequire, script)
 				["Content-Type"] = "application/json",
 			},
 		}
-
+	
 		if payload ~= nil then
 			request.Body = HttpService:JSONEncode(payload)
 		end
-
+	
 		local success, response = pcall(function()
 			return HttpService:RequestAsync(request)
 		end)
-
+	
 		if not success then
 			return false, tostring(response)
 		end
-
+	
 		if not response.Success then
 			return false, response.Body
 		end
-
+	
 		local decoded = nil
 		if response.Body and response.Body ~= "" then
 			local decodeSuccess, decodeResult = pcall(function()
@@ -1034,41 +1034,41 @@ __modules['network/HttpClient'] = function(moduleRequire, script)
 				decoded = decodeResult
 			end
 		end
-
+	
 		return true, decoded or {}
 	end
-
+	
 	function HttpClient:getHealth()
 		return self:request("GET", "/health")
 	end
-
+	
 	function HttpClient:getTree()
 		return self:request("GET", "/api/tree")
 	end
-
+	
 	return HttpClient
-
+	
 end
 
 __modules['network/WebSocketClient'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local HttpService = game:GetService("HttpService")
-
+	
 	local WebSocketClient = {}
 	WebSocketClient.__index = WebSocketClient
-
+	
 	local function normalizeWebSocketUrl(baseUrl)
 		local trimmed = string.gsub(baseUrl or "", "/+$", "")
 		if trimmed == "" then
 			return "ws://127.0.0.1:34872"
 		end
-
+	
 		trimmed = string.gsub(trimmed, "^http://", "ws://")
 		trimmed = string.gsub(trimmed, "^https://", "wss://")
 		trimmed = string.gsub(trimmed, "://localhost", "://127.0.0.1")
 		return trimmed
 	end
-
+	
 	function WebSocketClient.new(baseUrl, callbacks)
 		local self = setmetatable({}, WebSocketClient)
 		self.url = normalizeWebSocketUrl(baseUrl)
@@ -1081,47 +1081,47 @@ __modules['network/WebSocketClient'] = function(moduleRequire, script)
 		self.errorConnection = nil
 		return self
 	end
-
+	
 	function WebSocketClient:setBaseUrl(baseUrl)
 		self.url = normalizeWebSocketUrl(baseUrl)
 	end
-
+	
 	local function disconnect(connection)
 		if connection then
 			connection:Disconnect()
 		end
 	end
-
+	
 	function WebSocketClient:connect()
 		if self.socket then
 			return self.isOpen, self.isOpen and nil or "WebSocket connection is already opening."
 		end
-
+	
 		local success, socket = pcall(function()
 			return HttpService:CreateWebStreamClient(Enum.WebStreamClientType.WebSocket, {
 				Url = self.url,
 			})
 		end)
-
+	
 		if not success then
 			return false, tostring(socket)
 		end
-
+	
 		self.socket = socket
 		self.isOpen = false
-
+	
 		local settleEvent = Instance.new("BindableEvent")
 		local settled = false
-
+	
 		local function settle(result, message)
 			if settled then
 				return
 			end
-
+	
 			settled = true
 			settleEvent:Fire(result, message)
 		end
-
+	
 		self.openConnection = socket.Opened:Connect(function(responseStatusCode, headers)
 			self.isOpen = true
 			if self.callbacks.onOpen then
@@ -1129,116 +1129,120 @@ __modules['network/WebSocketClient'] = function(moduleRequire, script)
 			end
 			settle(true)
 		end)
-
+	
 		self.messageConnection = socket.MessageReceived:Connect(function(message)
 			if self.callbacks.onMessage then
 				self.callbacks.onMessage(message)
 			end
 		end)
-
+	
 		self.errorConnection = socket.Error:Connect(function(responseStatusCode, errorMessage)
 			local formatted = tostring(errorMessage)
 			if formatted == "" then
 				formatted = "WebSocket stream error."
 			end
-
+	
 			if self.callbacks.onError then
 				self.callbacks.onError(responseStatusCode, formatted)
 			end
-
+	
 			if not self.isOpen then
 				settle(false, formatted)
 			end
 		end)
-
+	
 		self.closeConnection = socket.Closed:Connect(function()
 			local wasOpen = self.isOpen
 			self.isOpen = false
-
+	
 			if not settled then
 				settle(false, "WebSocket closed before the connection opened.")
 			end
-
+	
 			if self.callbacks.onClose then
 				self.callbacks.onClose(wasOpen)
 			end
-
+	
 			self:close()
 		end)
-
+	
 		task.delay(5, function()
 			settle(false, "Timed out waiting for the WebSocket to open.")
 		end)
-
+	
 		local opened, errorMessage = settleEvent.Event:Wait()
 		settleEvent:Destroy()
-
+	
 		if not opened then
 			self:close()
 			return false, errorMessage
 		end
-
+	
 		return true
 	end
-
+	
 	function WebSocketClient:isConnected()
 		return self.socket ~= nil and self.isOpen
 	end
-
+	
 	function WebSocketClient:send(payload)
 		if not self.socket or not self.isOpen then
 			return false, "No WebSocket connection."
 		end
-
+	
 		local success, result = pcall(function()
 			self.socket:Send(HttpService:JSONEncode(payload))
 		end)
-
+	
 		if not success then
 			return false, tostring(result)
 		end
-
+	
 		return true
 	end
-
+	
 	function WebSocketClient:close()
 		local socket = self.socket
 		self.socket = nil
 		self.isOpen = false
-
+	
 		disconnect(self.messageConnection)
 		disconnect(self.closeConnection)
 		disconnect(self.openConnection)
 		disconnect(self.errorConnection)
-
+	
 		self.messageConnection = nil
 		self.closeConnection = nil
 		self.openConnection = nil
 		self.errorConnection = nil
-
+	
 		if socket then
 			pcall(function()
 				socket:Close()
 			end)
 		end
 	end
-
+	
 	return WebSocketClient
-
+	
 end
 
 __modules['sync/Listener'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local RunService = game:GetService("RunService")
 	local PathUtil = require(script.Parent.Parent.util.PathUtil)
-
+	
 	local Listener = {}
-	local DEFAULT_DEBOUNCE_SECONDS = 0.15
-
+	local DEBOUNCE_MS = {
+		default = 150,
+		script = 1500,
+		camera = 99999,
+	}
+	
 	local READ_ONLY_INSTANCES = {
 		["Workspace/Camera"] = true,
 	}
-
+	
 	local BLOCKED_SERVICES = {
 		CoreGui = true,
 		RobloxPluginGuiService = true,
@@ -1263,81 +1267,103 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 		BadgeService = true,
 		KeyframeSequenceProvider = true,
 	}
-
+	
 	local function isRuntimePlayerInstance(instance)
 		local parent = instance.Parent
 		if parent and parent.ClassName == "Players" then
 			return instance:IsA("Player")
 		end
-
+	
 		return false
 	end
-
+	
 	local function isBlockedService(instance)
 		local current = instance
 		while current.Parent ~= game and current.Parent ~= nil do
 			current = current.Parent
 		end
-
+	
 		return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
 	end
-
+	
+	local function getDebounceMs(instance, propertyName)
+		if instance:IsA("LuaSourceContainer") and propertyName == "Source" then
+			return DEBOUNCE_MS.script
+		end
+	
+		if instance.ClassName == "Camera" then
+			return DEBOUNCE_MS.camera
+		end
+	
+		return DEBOUNCE_MS.default
+	end
+	
+	local function safeReadSource(instance)
+		local success, value = pcall(function()
+			return instance.Source
+		end)
+	
+		if success and type(value) == "string" then
+			return value
+		end
+	
+		return nil
+	end
+	
 	function Listener.isReadOnlyInstance(instance)
 		if instance == nil then
 			return false
 		end
-
+	
 		return READ_ONLY_INSTANCES[PathUtil.getInstancePath(instance)] == true
 	end
-
+	
 	function Listener.isSyncAllowed()
 		return not RunService:IsRunning()
 	end
-
+	
 	function Listener.shouldSyncInstance(instance, shouldSync)
 		if instance == nil or instance == game then
 			return false
 		end
-
+	
 		if not Listener.isSyncAllowed() then
 			return false
 		end
-
+	
 		if isBlockedService(instance) then
 			return false
 		end
-
+	
 		if isRuntimePlayerInstance(instance) then
 			return false
 		end
-
+	
 		if type(shouldSync) == "function" then
 			return shouldSync(instance)
 		end
-
+	
 		return true
 	end
-
+	
 	function Listener.attach(shouldSync, callbacks, options)
 		local connections = {}
 		local changedConnections = {}
 		local nameChangedConnections = {}
 		local lastKnownPaths = {}
 		local pendingThreads = {}
-
-		local debounceSeconds = DEFAULT_DEBOUNCE_SECONDS
-		if type(options) == "table" and type(options.debounceSeconds) == "number" then
-			debounceSeconds = options.debounceSeconds
-		end
-
+		local pendingProperties = {}
+		local lastSentSource = {}
+	
 		local function cancelPending(instance)
 			local thread = pendingThreads[instance]
 			if thread then
 				task.cancel(thread)
 				pendingThreads[instance] = nil
 			end
+			pendingProperties[instance] = nil
 		end
-
+	
 		local function disconnectChanged(instance)
 			cancelPending(instance)
 			local existing = changedConnections[instance]
@@ -1351,74 +1377,87 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 				nameChangedConnections[instance] = nil
 			end
 		end
-
-		local function scheduleChanged(instance)
+	
+		local function scheduleChanged(instance, propertyName)
 			cancelPending(instance)
-
-			pendingThreads[instance] = task.delay(debounceSeconds, function()
+			pendingProperties[instance] = propertyName
+	
+			pendingThreads[instance] = task.delay(getDebounceMs(instance, propertyName) / 1000, function()
 				pendingThreads[instance] = nil
+				local pendingProperty = pendingProperties[instance]
+				pendingProperties[instance] = nil
 				local currentPath = PathUtil.getInstancePath(instance)
 				if not Listener.shouldSyncInstance(instance, shouldSync) then
 					lastKnownPaths[instance] = currentPath
 					return
 				end
-
+	
 				local previousPath = lastKnownPaths[instance]
-
+	
+				if pendingProperty == "Source" and instance:IsA("LuaSourceContainer") then
+					local newSource = safeReadSource(instance)
+					if newSource == nil or lastSentSource[instance] == newSource then
+						lastKnownPaths[instance] = currentPath
+						return
+					end
+					lastSentSource[instance] = newSource
+				end
+	
 				if previousPath and currentPath ~= previousPath and callbacks.onRenamed then
 					callbacks.onRenamed(instance, previousPath, currentPath)
 				elseif callbacks.onChanged then
-					callbacks.onChanged(instance)
+					callbacks.onChanged(instance, pendingProperty)
 				end
-
+	
 				lastKnownPaths[instance] = currentPath
 			end)
 		end
-
+	
 		local function connectInstance(instance)
 			if not Listener.isSyncAllowed() then
 				return
 			end
-
+	
 			if changedConnections[instance] or nameChangedConnections[instance] then
 				return
 			end
-
+	
 			lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
 			changedConnections[instance] = instance.Changed:Connect(function(propertyName)
 				if propertyName == "Name" then
 					return
 				end
-				scheduleChanged(instance)
+				scheduleChanged(instance, propertyName)
 			end)
 			nameChangedConnections[instance] = instance:GetPropertyChangedSignal("Name"):Connect(function()
 				if not Listener.isSyncAllowed() then
 					return
 				end
-
+	
 				local previousPath = lastKnownPaths[instance]
 				local currentPath = PathUtil.getInstancePath(instance)
 				lastKnownPaths[instance] = currentPath
-
+	
 				if not previousPath or previousPath == currentPath then
 					return
 				end
-
+	
 				if not Listener.shouldSyncInstance(instance, shouldSync) then
 					return
 				end
-
+	
 				if callbacks.onRenamed then
 					callbacks.onRenamed(instance, previousPath, currentPath)
 				end
 			end)
 		end
-
+	
 		local function unwatchInstance(instance)
 			disconnectChanged(instance)
 			lastKnownPaths[instance] = nil
+			lastSentSource[instance] = nil
 		end
-
+	
 		local function onAdded(instance)
 			lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
 			if Listener.shouldSyncInstance(instance, shouldSync) and callbacks.onAdded then
@@ -1426,7 +1465,7 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			end
 			connectInstance(instance)
 		end
-
+	
 		local function onRemoving(instance)
 			local previousPath = lastKnownPaths[instance] or PathUtil.getInstancePath(instance)
 			if Listener.shouldSyncInstance(instance, shouldSync) and callbacks.onRemoving then
@@ -1434,14 +1473,14 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			end
 			unwatchInstance(instance)
 		end
-
+	
 		for _, descendant in ipairs(game:GetDescendants()) do
 			connectInstance(descendant)
 		end
-
+	
 		table.insert(connections, game.DescendantAdded:Connect(onAdded))
 		table.insert(connections, game.DescendantRemoving:Connect(onRemoving))
-
+	
 		return function()
 			for _, connection in ipairs(connections) do
 				connection:Disconnect()
@@ -1458,29 +1497,35 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 				task.cancel(pendingThread)
 				pendingThreads[instance] = nil
 			end
+			for instance in pairs(pendingProperties) do
+				pendingProperties[instance] = nil
+			end
 			for instance in pairs(lastKnownPaths) do
 				lastKnownPaths[instance] = nil
 			end
+			for instance in pairs(lastSentSource) do
+				lastSentSource[instance] = nil
+			end
 		end
 	end
-
+	
 	return Listener
-
+	
 end
 
 __modules['sync/Serializer'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local CollectionService = game:GetService("CollectionService")
 	local ReflectionService = game:GetService("ReflectionService")
-
+	
 	local Serializer = {}
-
+	
 	local SCRIPT_CLASS_NAMES = {
 		Script = true,
 		LocalScript = true,
 		ModuleScript = true,
 	}
-
+	
 	local PROPERTY_DENYLIST = {
 		Parent = true,
 		Name = true,
@@ -1500,23 +1545,23 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 		numExpectedDirectChildren = true,
 		Children = true,
 	}
-
+	
 	local propertyCache = {}
-
+	
 	-- ── Helpers ──────────────────────────────────────────────────────────────────
-
+	
 	local function safeTostring(value)
 		local success, result = pcall(tostring, value)
 		return success and result or "<unprintable>"
 	end
-
+	
 	local function safeReadProperty(instance, propertyName)
 		local success, value = pcall(function()
 			return instance[propertyName]
 		end)
 		return success, success and value or nil
 	end
-
+	
 	local function safeReadStringProperty(instance, propertyName, fallback)
 		local success, value = safeReadProperty(instance, propertyName)
 		if success and type(value) == "string" and value ~= "" then
@@ -1524,27 +1569,27 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 		end
 		return fallback
 	end
-
+	
 	-- ── Property name discovery via ReflectionService ────────────────────────────
 	-- Uses GetPropertiesOfClass — the correct ReflectionService API.
 	-- Returns a flat array of property descriptor tables, each with:
 	--   .Name    (string)
 	--   .Permits (table, optional) — has .Read/.Write fields if restricted
-
+	
 	local function getPropertyNamesForClass(className)
 		if propertyCache[className] ~= nil then
 			return propertyCache[className]
 		end
-
+	
 		local ok, props = pcall(function()
 			return ReflectionService:GetPropertiesOfClass(className)
 		end)
-
+	
 		if not ok or type(props) ~= "table" then
 			propertyCache[className] = {}
 			return {}
 		end
-
+	
 		local names = {}
 		local seenLowercaseNames = {}
 		for _, prop in ipairs(props) do
@@ -1560,14 +1605,14 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 				end
 			end
 		end
-
+	
 		table.sort(names)
 		propertyCache[className] = names
 		return names
 	end
-
+	
 	-- ── Value encoder ─────────────────────────────────────────────────────────────
-
+	
 	local function encodeNumber(value)
 		local valueType = "float"
 		if value == value
@@ -1579,70 +1624,70 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 		end
 		return { type = valueType, value = value }
 	end
-
+	
 	local function encodeValue(value)
 		if value == nil then return nil end
-
+	
 		local valueType = typeof(value)
-
+	
 		if valueType == "boolean" then
 			return { type = "bool", value = value }
 		end
-
+	
 		if valueType == "number" then
 			return encodeNumber(value)
 		end
-
+	
 		if valueType == "string" then
 			return { type = "string", value = value }
 		end
-
+	
 		if valueType == "Vector3" then
 			return { type = "Vector3", value = { value.X, value.Y, value.Z } }
 		end
-
+	
 		if valueType == "CFrame" then
 			return { type = "CFrame", value = { value:GetComponents() } }
 		end
-
+	
 		if valueType == "Color3" then
 			return { type = "Color3", value = { value.R, value.G, value.B } }
 		end
-
+	
 		if valueType == "BrickColor" then
 			return { type = "BrickColor", value = value.Number }
 		end
-
+	
 		if valueType == "UDim2" then
 			return {
 				type = "UDim2",
 				value = { value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset },
 			}
 		end
-
+	
 		if valueType == "UDim" then
 			return { type = "UDim", value = { value.Scale, value.Offset } }
 		end
-
+	
 		if valueType == "NumberRange" then
 			return { type = "NumberRange", value = { value.Min, value.Max } }
 		end
-
+	
 		if valueType == "EnumItem" then
 			return { type = "EnumItem", value = safeTostring(value) }
 		end
-
+	
 		if valueType == "Vector2" then
 			return { type = "Vector2", value = { value.X, value.Y } }
 		end
-
+	
 		if valueType == "Rect" then
 			return {
 				type = "Rect",
 				value = { value.Min.X, value.Min.Y, value.Max.X, value.Max.Y },
 			}
 		end
-
+	
 		if valueType == "ColorSequence" then
 			local keypoints = {}
 			for _, kp in ipairs(value.Keypoints) do
@@ -1650,7 +1695,7 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			end
 			return { type = "ColorSequence", value = keypoints }
 		end
-
+	
 		if valueType == "NumberSequence" then
 			local keypoints = {}
 			for _, kp in ipairs(value.Keypoints) do
@@ -1658,56 +1703,56 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			end
 			return { type = "NumberSequence", value = keypoints }
 		end
-
+	
 		return { type = "unknown", raw = safeTostring(value) }
 	end
-
+	
 	-- ── Attribute encoder ─────────────────────────────────────────────────────────
-
+	
 	local function encodeAttributes(instance)
 		local success, attributes = pcall(function()
 			return instance:GetAttributes()
 		end)
 		if not success or type(attributes) ~= "table" then return {} end
-
+	
 		local encoded = {}
 		for attrName, attrValue in pairs(attributes) do
 			encoded[attrName] = encodeValue(attrValue)
 		end
 		return encoded
 	end
-
+	
 	-- ── Script source ─────────────────────────────────────────────────────────────
-
+	
 	local function safeScriptSource(instance, className)
 		if not SCRIPT_CLASS_NAMES[className] then return nil end
 		local success, source = safeReadProperty(instance, "Source")
 		if success and type(source) == "string" then return source end
 		return nil
 	end
-
+	
 	-- ── Collection helpers ────────────────────────────────────────────────────────
-
+	
 	local function safeGetTags(instance)
 		local success, tags = pcall(function()
 			return CollectionService:GetTags(instance)
 		end)
 		return (success and type(tags) == "table") and tags or {}
 	end
-
+	
 	local function safeGetChildren(instance)
 		local success, children = pcall(function()
 			return instance:GetChildren()
 		end)
 		return (success and type(children) == "table") and children or {}
 	end
-
+	
 	-- ── Public API ────────────────────────────────────────────────────────────────
-
+	
 	function Serializer.serializeInstance(instance, deep)
 		local className = safeReadStringProperty(instance, "ClassName", "Instance")
 		local name = safeReadStringProperty(instance, "Name", className)
-
+	
 		local serialized = {
 			name = name,
 			className = className,
@@ -1716,7 +1761,7 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			tags = safeGetTags(instance),
 			children = {},
 		}
-
+	
 		for _, propertyName in ipairs(getPropertyNamesForClass(className)) do
 			local success, propertyValue = safeReadProperty(instance, propertyName)
 			if success then
@@ -1726,32 +1771,32 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 				end
 			end
 		end
-
+	
 		local source = safeScriptSource(instance, className)
 		if source ~= nil then
 			serialized.source = source
 		end
-
+	
 		if deep then
 			for _, child in ipairs(safeGetChildren(instance)) do
 				table.insert(serialized.children, Serializer.serializeInstance(child, true))
 			end
 		end
-
+	
 		return serialized
 	end
-
+	
 	return Serializer
-
+	
 end
 
 __modules['sync/Deserializer'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local ChangeHistoryService = game:GetService("ChangeHistoryService")
 	local CollectionService = game:GetService("CollectionService")
-
+	
 	local Deserializer = {}
-
+	
 	local READ_ONLY_INSTANCES = {
 		["Workspace/Camera"] = true,
 	}
@@ -1760,7 +1805,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		LocalScript = true,
 		ModuleScript = true,
 	}
-
+	
 	local PROPERTY_DENYLIST = {
 		Parent = true,
 		Name = true,
@@ -1780,32 +1825,32 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		numExpectedDirectChildren = true,
 		Children = true,
 	}
-
+	
 	local function readEncodedType(rawValue)
 		if type(rawValue) ~= "table" then
 			return nil
 		end
-
+	
 		return rawValue.type or rawValue.Type
 	end
-
+	
 	local function readEncodedValue(rawValue)
 		if type(rawValue) ~= "table" then
 			return rawValue
 		end
-
+	
 		if rawValue.value ~= nil then
 			return rawValue.value
 		end
-
+	
 		return rawValue.Value
 	end
-
+	
 	local function decodeEnumItem(enumText)
 		if type(enumText) ~= "string" or enumText == "" then
 			return nil
 		end
-
+	
 		local segments = string.split(enumText, ".")
 		if #segments >= 3 and segments[1] == "Enum" then
 			local enumType = Enum[segments[2]]
@@ -1818,46 +1863,46 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return enumType[segments[2]]
 			end
 		end
-
+	
 		return nil
 	end
-
+	
 	local function decodeValue(rawValue)
 		if typeof(rawValue) ~= "table" then
 			return rawValue
 		end
-
+	
 		local encodedType = readEncodedType(rawValue)
 		local encodedValue = readEncodedValue(rawValue)
-
+	
 		if type(encodedType) ~= "string" then
 			return rawValue
 		end
-
+	
 		if encodedType == "Vector2" and type(encodedValue) == "table" and #encodedValue >= 2 then
 			return Vector2.new(encodedValue[1], encodedValue[2])
 		end
-
+	
 		if encodedType == "Vector3" and type(encodedValue) == "table" and #encodedValue >= 3 then
 			return Vector3.new(encodedValue[1], encodedValue[2], encodedValue[3])
 		end
-
+	
 		if encodedType == "Color3" and type(encodedValue) == "table" and #encodedValue >= 3 then
 			return Color3.new(encodedValue[1], encodedValue[2], encodedValue[3])
 		end
-
+	
 		if encodedType == "UDim2" and type(encodedValue) == "table" and #encodedValue >= 4 then
 			return UDim2.new(encodedValue[1], encodedValue[2], encodedValue[3], encodedValue[4])
 		end
-
+	
 		if encodedType == "UDim" and type(encodedValue) == "table" and #encodedValue >= 2 then
 			return UDim.new(encodedValue[1], encodedValue[2])
 		end
-
+	
 		if encodedType == "CFrame" and type(encodedValue) == "table" then
 			return CFrame.new(unpack(encodedValue))
 		end
-
+	
 		if encodedType == "BrickColor" and type(encodedValue) == "string" then
 			local success, result = pcall(function()
 				return BrickColor.new(encodedValue)
@@ -1866,7 +1911,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return result
 			end
 		end
-
+	
 		if encodedType == "BrickColor" and type(encodedValue) == "number" then
 			local success, result = pcall(function()
 				return BrickColor.new(encodedValue)
@@ -1875,38 +1920,38 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return result
 			end
 		end
-
+	
 		if encodedType == "EnumItem" then
 			return decodeEnumItem(encodedValue)
 		end
-
+	
 		if encodedType == "Enum" then
 			return decodeEnumItem(encodedValue)
 		end
-
+	
 		if encodedType == "bool" or encodedType == "boolean" then
 			return encodedValue == true
 		end
-
+	
 		if encodedType == "int" or encodedType == "float" or encodedType == "number" then
 			return tonumber(encodedValue)
 		end
-
+	
 		if encodedType == "string" then
 			return tostring(encodedValue)
 		end
-
+	
 		if encodedType == "NumberRange" and type(encodedValue) == "table" and #encodedValue >= 2 then
 			return NumberRange.new(encodedValue[1], encodedValue[2])
 		end
-
+	
 		if encodedType == "Rect" and type(encodedValue) == "table" and #encodedValue >= 4 then
 			return Rect.new(
 				Vector2.new(encodedValue[1], encodedValue[2]),
 				Vector2.new(encodedValue[3], encodedValue[4])
 			)
 		end
-
+	
 		if encodedType == "Ray" and type(encodedValue) == "table" and #encodedValue >= 2 then
 			local origin = decodeValue({
 				type = "Vector3",
@@ -1920,7 +1965,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return Ray.new(origin, direction)
 			end
 		end
-
+	
 		if encodedType == "PhysicalProperties" and type(encodedValue) == "table" and #encodedValue >= 5 then
 			return PhysicalProperties.new(
 				encodedValue[1],
@@ -1930,7 +1975,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				encodedValue[5]
 			)
 		end
-
+	
 		if encodedType == "Axes" and type(encodedValue) == "table" then
 			local axes = {}
 			for _, axisName in ipairs(encodedValue) do
@@ -1946,7 +1991,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return Axes.new(unpack(axes))
 			end
 		end
-
+	
 		if encodedType == "Faces" and type(encodedValue) == "table" then
 			local faces = {}
 			for _, faceName in ipairs(encodedValue) do
@@ -1959,7 +2004,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return Faces.new(unpack(faces))
 			end
 		end
-
+	
 		if encodedType == "NumberSequence" and type(encodedValue) == "table" then
 			local keypoints = {}
 			for _, keypoint in ipairs(encodedValue) do
@@ -1971,7 +2016,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return NumberSequence.new(keypoints)
 			end
 		end
-
+	
 		if encodedType == "ColorSequence" and type(encodedValue) == "table" then
 			local keypoints = {}
 			for _, keypoint in ipairs(encodedValue) do
@@ -1989,7 +2034,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				return ColorSequence.new(keypoints)
 			end
 		end
-
+	
 		if encodedType == "Font" and type(encodedValue) == "table" then
 			local family = encodedValue.Family or encodedValue.family
 			if type(family) == "string" and family ~= "" then
@@ -2003,10 +2048,10 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				end
 			end
 		end
-
+	
 		return encodedValue
 	end
-
+	
 	local function applyAttributesExact(instance, attributes)
 		local desired = {}
 		for key, value in pairs(attributes or {}) do
@@ -2016,7 +2061,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				instance:SetAttribute(key, decoded)
 			end)
 		end
-
+	
 		for key in pairs(instance:GetAttributes()) do
 			if string.sub(key, 1, 7) == "_RoSync" or not desired[key] then
 				pcall(function()
@@ -2025,7 +2070,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 		end
 	end
-
+	
 	local function applyTagsExact(instance, tags)
 		local desired = {}
 		for _, tag in ipairs(tags or {}) do
@@ -2038,7 +2083,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				end
 			end
 		end
-
+	
 		for _, tag in ipairs(CollectionService:GetTags(instance)) do
 			if not desired[tag] then
 				pcall(function()
@@ -2047,24 +2092,24 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 		end
 	end
-
+	
 	local function createInstanceForNode(node)
 		local success, created = pcall(function()
 			return Instance.new(node.className)
 		end)
-
+	
 		if success then
 			return created
 		end
-
+	
 		local fallback = Instance.new("Folder")
 		fallback.Name = node.name or node.className or "Instance"
 		return fallback
 	end
-
+	
 	local function applyProperties(instance, node)
 		local deferredPrimaryPart = nil
-
+	
 		for propertyName, rawValue in pairs(node.properties or {}) do
 			if propertyName == "PrimaryPart" then
 				deferredPrimaryPart = rawValue
@@ -2077,61 +2122,61 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				end
 			end
 		end
-
+	
 		if SCRIPT_CLASS_NAMES[instance.ClassName] and type(node.source) == "string" then
 			pcall(function()
 				instance.Source = node.source
 			end)
 		end
-
+	
 		return deferredPrimaryPart
 	end
-
+	
 	local function findCandidateChild(parent, node)
 		local existing = parent:FindFirstChild(node.name)
 		if not existing then
 			return nil
 		end
-
+	
 		if existing.ClassName == node.className then
 			return existing
 		end
-
+	
 		pcall(function()
 			existing:Destroy()
 		end)
 		return nil
 	end
-
+	
 	local function applyNode(instance, node, nodePath)
 		if isReadOnlyPath(nodePath) then
 			return true
 		end
-
+	
 		instance.Name = node.name
-
+	
 		applyAttributesExact(instance, node.attributes)
 		applyTagsExact(instance, node.tags)
 		local deferredPrimaryPart = applyProperties(instance, node)
-
+	
 		local matchedChildren = {}
 		for _, childNode in ipairs(node.children or {}) do
 			local childPath = joinPath(nodePath, childNode.name)
 			if isReadOnlyPath(childPath) then
 				continue
 			end
-
+	
 			local childInstance = findCandidateChild(instance, childNode)
 			if not childInstance then
 				childInstance = createInstanceForNode(childNode)
 				childInstance.Name = childNode.name
 				childInstance.Parent = instance
 			end
-
+	
 			matchedChildren[childInstance] = true
 			applyNode(childInstance, childNode, childPath)
 		end
-
+	
 		if type(deferredPrimaryPart) == "table" then
 			local referenceValue = deferredPrimaryPart.value or deferredPrimaryPart.Value or deferredPrimaryPart
 			local targetName = type(referenceValue) == "table" and referenceValue.name or nil
@@ -2145,109 +2190,109 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 		end
 	end
-
+	
 	local function getServiceRoot(serviceName)
 		local success, service = pcall(function()
 			return game:GetService(serviceName)
 		end)
-
+	
 		if success then
 			return service
 		end
-
+	
 		return game:FindFirstChild(serviceName)
 	end
-
+	
 	local function applyServiceNode(serviceNode)
 		local service = getServiceRoot(serviceNode.name)
 		if not service then
 			return false, "Missing service " .. tostring(serviceNode.name)
 		end
-
+	
 		applyAttributesExact(service, serviceNode.attributes)
 		applyTagsExact(service, serviceNode.tags)
 		applyProperties(service, serviceNode)
-
+	
 		local matchedChildren = {}
 		for _, childNode in ipairs(serviceNode.children or {}) do
 			local childPath = joinPath(serviceNode.name, childNode.name)
 			if isReadOnlyPath(childPath) then
 				continue
 			end
-
+	
 			local childInstance = findCandidateChild(service, childNode)
 			if not childInstance then
 				childInstance = createInstanceForNode(childNode)
 				childInstance.Name = childNode.name
 				childInstance.Parent = service
 			end
-
+	
 			matchedChildren[childInstance] = true
 			applyNode(childInstance, childNode, childPath)
 		end
-
+	
 		return true
 	end
-
+	
 	local function splitPath(pathValue)
 		local segments = {}
 		if type(pathValue) ~= "string" or pathValue == "" then
 			return segments
 		end
-
+	
 		for _, segment in ipairs(string.split(pathValue, "/")) do
 			if segment ~= "" then
 				table.insert(segments, segment)
 			end
 		end
-
+	
 		return segments
 	end
-
+	
 	local function joinPath(parentPath, childName)
 		if parentPath == nil or parentPath == "" then
 			return childName
 		end
-
+	
 		return parentPath .. "/" .. childName
 	end
-
+	
 	local function isReadOnlyPath(pathValue)
 		return READ_ONLY_INSTANCES[pathValue] == true
 	end
-
+	
 	local function findInstanceByPath(pathValue)
 		local segments = splitPath(pathValue)
 		if #segments == 0 then
 			return nil
 		end
-
+	
 		local current = getServiceRoot(segments[1])
 		if not current then
 			return nil
 		end
-
+	
 		for index = 2, #segments do
 			current = current:FindFirstChild(segments[index])
 			if not current then
 				return nil
 			end
 		end
-
+	
 		return current
 	end
-
+	
 	local function ensureParentForPath(pathValue)
 		local segments = splitPath(pathValue)
 		if #segments <= 1 then
 			return nil, "Expected an instance path below a service."
 		end
-
+	
 		local current = getServiceRoot(segments[1])
 		if not current then
 			return nil, "Missing service " .. tostring(segments[1])
 		end
-
+	
 		for index = 2, #segments - 1 do
 			local segment = segments[index]
 			local child = current:FindFirstChild(segment)
@@ -2258,26 +2303,26 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 			current = child
 		end
-
+	
 		return current
 	end
-
+	
 	function Deserializer.applySyncInstance(pathValue, node)
 		if type(pathValue) ~= "string" or type(node) ~= "table" then
 			return false, "Expected path and node."
 		end
-
+	
 		if isReadOnlyPath(pathValue) then
 			return true
 		end
-
+	
 		local segments = splitPath(pathValue)
 		if #segments == 0 then
 			return false, "Expected a Roblox path."
 		end
-
+	
 		ChangeHistoryService:SetWaypoint("Before RoSync Sync Instance")
-
+	
 		if #segments == 1 then
 			local success, result = applyServiceNode({
 				name = segments[1],
@@ -2291,12 +2336,12 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
 			return success, result
 		end
-
+	
 		local parent, parentError = ensureParentForPath(pathValue)
 		if not parent then
 			return false, parentError
 		end
-
+	
 		local childNode = {
 			name = segments[#segments],
 			className = node.className or "Folder",
@@ -2306,61 +2351,61 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			source = node.source,
 			children = node.children or {},
 		}
-
+	
 		local instance = findCandidateChild(parent, childNode)
 		if not instance then
 			instance = createInstanceForNode(childNode)
 			instance.Name = childNode.name
 			instance.Parent = parent
 		end
-
+	
 		applyNode(instance, childNode, pathValue)
 		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
 		return true
 	end
-
+	
 	function Deserializer.removeAtPath(pathValue)
 		if isReadOnlyPath(pathValue) then
 			return true
 		end
-
+	
 		local instance = findInstanceByPath(pathValue)
 		if not instance then
 			return false, "Instance not found at " .. tostring(pathValue)
 		end
-
+	
 		if instance == game then
 			return false, "Cannot remove the DataModel root."
 		end
-
+	
 		ChangeHistoryService:SetWaypoint("Before RoSync Remove")
 		local success, removeError = pcall(function()
 			instance:Destroy()
 		end)
 		ChangeHistoryService:SetWaypoint("After RoSync Remove")
-
+	
 		if not success then
 			return false, tostring(removeError)
 		end
-
+	
 		return true
 	end
-
+	
 	function Deserializer.renameAtPath(oldPath, newPath)
 		if isReadOnlyPath(oldPath) or isReadOnlyPath(newPath) then
 			return true
 		end
-
+	
 		local instance = findInstanceByPath(oldPath)
 		if not instance then
 			return false, "Instance not found at " .. tostring(oldPath)
 		end
-
+	
 		local segments = splitPath(newPath)
 		if #segments == 0 then
 			return false, "Expected a destination Roblox path."
 		end
-
+	
 		local nextParent = nil
 		if #segments > 1 then
 			local parent, parentError = ensureParentForPath(newPath)
@@ -2369,77 +2414,77 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 			nextParent = parent
 		end
-
+	
 		ChangeHistoryService:SetWaypoint("Before RoSync Rename")
-
+	
 		local success, renameError = pcall(function()
 			if nextParent then
 				instance.Parent = nextParent
 			end
 			instance.Name = segments[#segments]
 		end)
-
+	
 		ChangeHistoryService:SetWaypoint("After RoSync Rename")
-
+	
 		if not success then
 			return false, tostring(renameError)
 		end
-
+	
 		return true
 	end
-
+	
 	function Deserializer.applyTree(tree)
 		if type(tree) ~= "table" or type(tree.services) ~= "table" then
 			return false, "Expected a tree with services."
 		end
-
+	
 		local errors = {}
 		ChangeHistoryService:SetWaypoint("Before RoSync Apply")
-
+	
 		for _, serviceNode in ipairs(tree.services) do
 			local success, result = applyServiceNode(serviceNode)
 			if not success then
 				table.insert(errors, tostring(result))
 			end
 		end
-
+	
 		ChangeHistoryService:SetWaypoint("After RoSync Apply")
-
+	
 		if #errors > 0 then
 			return false, table.concat(errors, "\n")
 		end
-
+	
 		return true
 	end
-
+	
 	return Deserializer
-
+	
 end
 
 __modules['util/PathUtil'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local PathUtil = {}
-
+	
 	function PathUtil.getInstancePath(instance)
 		local segments = {}
 		local current = instance
-
+	
 		while current and current ~= game do
 			table.insert(segments, 1, current.Name)
 			current = current.Parent
 		end
-
+	
 		return table.concat(segments, "/")
 	end
-
+	
 	return PathUtil
-
+	
 end
 
 __modules['util/SchemaUtil'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local ReflectionService = game:GetService("ReflectionService")
-
+	
 	local SchemaUtil = {}
 	local PROPERTY_DENYLIST = {
 		Parent = true,
@@ -2460,14 +2505,14 @@ __modules['util/SchemaUtil'] = function(moduleRequire, script)
 		numExpectedDirectChildren = true,
 		Children = true,
 	}
-
+	
 	local propertyCache = {}
-
+	
 	function SchemaUtil.getSyncableProperties(className)
 		if propertyCache[className] ~= nil then
 			return propertyCache[className]
 		end
-
+	
 		local properties = {}
 		local success, reflectedProperties = pcall(function()
 			return ReflectionService:GetPropertiesOfClass(className, {
@@ -2475,27 +2520,27 @@ __modules['util/SchemaUtil'] = function(moduleRequire, script)
 				ExcludeDisplay = false,
 			})
 		end)
-
+	
 		if success and type(reflectedProperties) == "table" then
 			for _, property in ipairs(reflectedProperties) do
 				local propertyName = property.Name
 				local permits = property.Permits
 				local canRead = permits == nil or permits.Read ~= nil or permits.ReadParallel ~= nil
 				local canWrite = permits == nil or permits.Write ~= nil or permits.WriteParallel ~= nil
-
+	
 				if type(propertyName) == "string" and property.Serialized ~= false and canRead and canWrite and not PROPERTY_DENYLIST[propertyName] then
 					table.insert(properties, propertyName)
 				end
 			end
 		end
-
+	
 		table.sort(properties)
 		propertyCache[className] = properties
 		return properties
 	end
-
+	
 	return SchemaUtil
-
+	
 end
 
 __modules['main.client'](__require, script)
