@@ -16,6 +16,11 @@ interface BackupEntry {
   isDirectory: boolean;
 }
 
+interface CommandResolution {
+  executable: string;
+  shell: boolean;
+}
+
 function executableName(command: string): string {
   if (process.platform !== "win32") {
     return command;
@@ -36,49 +41,90 @@ function executableName(command: string): string {
   return command;
 }
 
-function runCommand(command: string, args: string[], cwd: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executableName(command), args, {
-      cwd,
-      stdio: "inherit",
-    });
+function getWindowsNpmFallbacks(): string[] {
+  const fallbacks = new Set<string>();
+  const env = process.env;
+  const candidateRoots = [env.ProgramFiles, env["ProgramFiles(x86)"], env.LocalAppData, env.APPDATA].filter(
+    (value): value is string => typeof value === "string" && value.length > 0,
+  );
 
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`Command failed (${command} ${args.join(" ")}). Exit code: ${code ?? "unknown"}.`));
-    });
+  for (const root of candidateRoots) {
+    fallbacks.add(path.join(root, "nodejs", "npm.cmd"));
+    fallbacks.add(path.join(root, "Programs", "nodejs", "npm.cmd"));
+    fallbacks.add(path.join(root, "npm", "npm.cmd"));
+  }
+
+  return [...fallbacks];
+}
+
+async function resolveCommand(command: string): Promise<CommandResolution> {
+  const shell = process.platform === "win32";
+  const executable = executableName(command);
+
+  if (process.platform !== "win32" || command !== "npm") {
+    return { executable, shell };
+  }
+
+  for (const candidate of getWindowsNpmFallbacks()) {
+    if (await pathExists(candidate)) {
+      return { executable: candidate, shell };
+    }
+  }
+
+  return { executable, shell };
+}
+
+async function runCommand(command: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    void (async () => {
+      const resolution = await resolveCommand(command);
+      const child = spawn(resolution.executable, args, {
+        cwd,
+        shell: resolution.shell,
+        stdio: "inherit",
+      });
+
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`Command failed (${command} ${args.join(" ")}). Exit code: ${code ?? "unknown"}.`));
+      });
+    })().catch(reject);
   });
 }
 
-function runCommandCapture(command: string, args: string[], cwd: string): Promise<CapturedCommandResult> {
+async function runCommandCapture(command: string, args: string[], cwd: string): Promise<CapturedCommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executableName(command), args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      resolve({
-        code: code ?? 1,
-        stdout,
-        stderr,
+    void (async () => {
+      const resolution = await resolveCommand(command);
+      const child = spawn(resolution.executable, args, {
+        cwd,
+        shell: resolution.shell,
+        stdio: ["ignore", "pipe", "pipe"],
       });
-    });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk.toString();
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        resolve({
+          code: code ?? 1,
+          stdout,
+          stderr,
+        });
+      });
+    })().catch(reject);
   });
 }
 
