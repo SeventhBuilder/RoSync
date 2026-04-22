@@ -4,6 +4,10 @@ local PathUtil = require(script.Parent.Parent.util.PathUtil)
 local Listener = {}
 local DEFAULT_DEBOUNCE_SECONDS = 0.15
 
+local READ_ONLY_INSTANCES = {
+	["Workspace/Camera"] = true,
+}
+
 local BLOCKED_SERVICES = {
 	CoreGui = true,
 	RobloxPluginGuiService = true,
@@ -45,6 +49,14 @@ local function isBlockedService(instance)
 	end
 
 	return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
+end
+
+function Listener.isReadOnlyInstance(instance)
+	if instance == nil then
+		return false
+	end
+
+	return READ_ONLY_INSTANCES[PathUtil.getInstancePath(instance)] == true
 end
 
 function Listener.isSyncAllowed()

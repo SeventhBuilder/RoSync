@@ -1389,6 +1389,10 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 	local Listener = {}
 	local DEFAULT_DEBOUNCE_SECONDS = 0.15
 	
+	local READ_ONLY_INSTANCES = {
+		["Workspace/Camera"] = true,
+	}
+	
 	local BLOCKED_SERVICES = {
 		CoreGui = true,
 		RobloxPluginGuiService = true,
@@ -1430,6 +1434,14 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 		end
 	
 		return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
+	end
+	
+	function Listener.isReadOnlyInstance(instance)
+		if instance == nil then
+			return false
+		end
+	
+		return READ_ONLY_INSTANCES[PathUtil.getInstancePath(instance)] == true
 	end
 	
 	function Listener.isSyncAllowed()
@@ -1874,6 +1886,9 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	local Deserializer = {}
 	
 	local MANAGED_ATTRIBUTE = "_RoSyncManaged"
+	local READ_ONLY_INSTANCES = {
+		["Workspace/Camera"] = true,
+	}
 	local SCRIPT_CLASS_NAMES = {
 		Script = true,
 		LocalScript = true,
@@ -2222,7 +2237,11 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		return nil
 	end
 	
-	local function applyNode(instance, node)
+	local function applyNode(instance, node, nodePath)
+		if isReadOnlyPath(nodePath) then
+			return true
+		end
+	
 		instance.Name = node.name
 		pcall(function()
 			instance:SetAttribute(MANAGED_ATTRIBUTE, true)
@@ -2234,6 +2253,11 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 		local matchedChildren = {}
 		for _, childNode in ipairs(node.children or {}) do
+			local childPath = joinPath(nodePath, childNode.name)
+			if isReadOnlyPath(childPath) then
+				continue
+			end
+	
 			local childInstance = findCandidateChild(instance, childNode)
 			if not childInstance then
 				childInstance = createInstanceForNode(childNode)
@@ -2242,7 +2266,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 	
 			matchedChildren[childInstance] = true
-			applyNode(childInstance, childNode)
+			applyNode(childInstance, childNode, childPath)
 		end
 	
 		if type(deferredPrimaryPart) == "table" then
@@ -2286,6 +2310,11 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 		local matchedChildren = {}
 		for _, childNode in ipairs(serviceNode.children or {}) do
+			local childPath = joinPath(serviceNode.name, childNode.name)
+			if isReadOnlyPath(childPath) then
+				continue
+			end
+	
 			local childInstance = findCandidateChild(service, childNode)
 			if not childInstance then
 				childInstance = createInstanceForNode(childNode)
@@ -2294,7 +2323,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			end
 	
 			matchedChildren[childInstance] = true
-			applyNode(childInstance, childNode)
+			applyNode(childInstance, childNode, childPath)
 		end
 	
 		return true
@@ -2313,6 +2342,18 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	
 		return segments
+	end
+	
+	local function joinPath(parentPath, childName)
+		if parentPath == nil or parentPath == "" then
+			return childName
+		end
+	
+		return parentPath .. "/" .. childName
+	end
+	
+	local function isReadOnlyPath(pathValue)
+		return READ_ONLY_INSTANCES[pathValue] == true
 	end
 	
 	local function findInstanceByPath(pathValue)
@@ -2369,6 +2410,10 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			return false, "Expected path and node."
 		end
 	
+		if isReadOnlyPath(pathValue) then
+			return true
+		end
+	
 		local segments = splitPath(pathValue)
 		if #segments == 0 then
 			return false, "Expected a Roblox path."
@@ -2412,12 +2457,16 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			instance.Parent = parent
 		end
 	
-		applyNode(instance, childNode)
+		applyNode(instance, childNode, pathValue)
 		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
 		return true
 	end
 	
 	function Deserializer.removeAtPath(pathValue)
+		if isReadOnlyPath(pathValue) then
+			return true
+		end
+	
 		local instance = findInstanceByPath(pathValue)
 		if not instance then
 			return false, "Instance not found at " .. tostring(pathValue)
@@ -2441,6 +2490,10 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	end
 	
 	function Deserializer.renameAtPath(oldPath, newPath)
+		if isReadOnlyPath(oldPath) or isReadOnlyPath(newPath) then
+			return true
+		end
+	
 		local instance = findInstanceByPath(oldPath)
 		if not instance then
 			return false, "Instance not found at " .. tostring(oldPath)
