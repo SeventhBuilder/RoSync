@@ -8,6 +8,7 @@
 - Studio plugin transport foundation: HTTP health checks, WebSocket connect/reconnect, polling fallback, push/pull commands, and a scrollable sync activity feed exist in the Studio plugin source and bundled plugin artifact.
 - VS Code live client foundation: the extension connects over WebSocket, shows Explorer and Sync Status sidebars, updates incrementally from daemon events, and tracks connection state in the status bar.
 - Installer/update metadata foundation: Windows, macOS, and Linux source installers plus uninstall/update metadata flows exist in the repo and were carried through the audit as implemented foundations.
+- `rosync init` now scaffolds `TextChatService/` by default alongside the standard service folders in `src/`.
 
 ## 🔴 Known Broken
 - First Connect wipes Studio instances: the non-destructive connect fix is now committed and pushed in `plugin/src/main.client.luau` and `plugin/src/sync/Deserializer.luau`, but manual Studio verification is still pending before this can move to ✅ working.
@@ -21,10 +22,12 @@
 - `_RoSyncManaged` attribute pollution is removed in current deserializer code, but old `.instance.json` files or Studio state may still contain stale data from earlier runs until they are rewritten or cleaned.
 - Property-name case deduplication is implemented for new serializer output, but older `.instance.json` files can still contain stale duplicate keys such as `Archive` and `archive` until they are regenerated.
 - `Workspace/Camera` is treated as read-only in current code so it can serialize to disk without being pushed back into Studio, but the camera-glitch behavior still needs Studio verification against the updated installed plugin.
+- Plugin-side debounce and flood control are now tighter in code: scripts use a longer debounce window, camera change events are effectively suppressed, and repeated identical `Source` values are cached to avoid backspace/empty-script flood. This still needs Studio verification against real edit flows.
+- Disk -> Studio instance creation now recursively creates nested children during tree apply and `SYNC_INSTANCE` apply, but still needs Studio verification against nested folder trees and real daemon payloads.
 - RunService play-mode guarding is implemented in current plugin code for watch/push/pull paths, but still needs Studio verification against the updated installed plugin.
 - `rosync update` has Windows npm-path fallback logic in code now, but still needs a fresh manual Windows update run before it can move to ✅ working.
 - Rename in Studio -> disk propagation is now committed and pushed, but still needs end-to-end Studio verification before it can move to ✅ working; owned by `plugin/src/sync/Listener.luau`, `plugin/src/main.client.luau`, and `daemon/src/sync/engine.ts`.
-- Plugin UI redesign is now committed and pushed with a single Connect/Disconnect toggle and no Start Watch button, but still needs Studio verification before it can move to ✅ working; owned by `plugin/src/main.client.luau`.
+- Plugin UI redesign is now committed and pushed with a single Connect/Disconnect toggle, no Start Watch button, reduced Studio Output noise, white rename logs, and blue move logs for reparent operations, but still needs Studio verification before it can move to ✅ working; owned by `plugin/src/main.client.luau`.
 - VS Code extension: Explorer and status panels are live, but the property panel, conflict diff UX, Git history panel, AI agent log/context generation, and polished icon/state behavior are still incomplete at the repo level.
 - Docs/tutorial parity: README, architecture, testing, and docs scaffolding exist, but the full tutorial, troubleshooting, schema reference, and broader Docusaurus parity with the prompt are still unfinished.
 - Install/release flow: source installers and uninstallers exist, but full fresh-machine verification, extension packaging automation, and release-grade parity still need work.
@@ -36,4 +39,4 @@
 - Fresh-machine gate verification for Phases 8–10: medium priority — installers and update/uninstall need a full clean-environment proof pass.
 
 ## 📋 Current Focus
-Re-test the updated installed Studio plugin after the local plugin-copy sync, focusing first on first-connect safety, blocked-service/runtime-player filtering, camera behavior, rename propagation, and the redesigned UI.
+Re-test the updated installed Studio plugin after the latest plugin fixes, focusing first on first-connect safety, blocked-service/runtime-player filtering, recursive disk -> Studio creation, script debounce behavior, camera behavior, rename/move propagation, and the redesigned UI/log feed.
