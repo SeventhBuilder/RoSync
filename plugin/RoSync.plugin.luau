@@ -286,6 +286,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	local connectSocket
 	local pushServices
 	local statusMode = "disconnected"
+	local suppressNextSocketCloseOutput = false
 	
 	local function daemonIndexedInstanceCount(statusResponse)
 		if type(statusResponse) ~= "table" then
@@ -305,9 +306,9 @@ __modules['main.client'] = function(moduleRequire, script)
 		return nil
 	end
 	
-	local function writeOutput(message, level)
+	local function writeStudioOutput(message, level)
 		local formatted = "[RoSync Plugin] " .. tostring(message)
-		if level == "warn" or level == "error" then
+		if level == "error" then
 			warn(formatted)
 		else
 			print(formatted)
@@ -346,7 +347,6 @@ __modules['main.client'] = function(moduleRequire, script)
 		entry.TextYAlignment = Enum.TextYAlignment.Top
 		entry.Parent = logScrollFrame
 	
-		writeOutput(plainText, level)
 		scrollLogToBottom()
 	end
 	
@@ -750,6 +750,10 @@ __modules['main.client'] = function(moduleRequire, script)
 							or "WebSocket closed before the daemon handshake completed. Falling back to HTTP polling.",
 						"warn"
 					)
+					if not suppressNextSocketCloseOutput then
+						writeStudioOutput("Connection lost from RoSync daemon.")
+					end
+					suppressNextSocketCloseOutput = false
 					startPolling("socket-closed")
 					scheduleReconnect()
 					return
@@ -757,6 +761,10 @@ __modules['main.client'] = function(moduleRequire, script)
 				stopPolling()
 				setStatus("disconnected")
 				appendLog("WebSocket closed.")
+				if not suppressNextSocketCloseOutput then
+					writeStudioOutput("Connection lost from RoSync daemon.")
+				end
+				suppressNextSocketCloseOutput = false
 			end,
 		})
 	
@@ -784,6 +792,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		setStatus("connected")
 		appendLog("Connected to RoSync daemon at " .. currentServerUrl() .. ".")
+		writeStudioOutput("Connection established with RoSync daemon at " .. currentServerUrl() .. ".")
 		return true
 	end
 	
@@ -890,11 +899,13 @@ __modules['main.client'] = function(moduleRequire, script)
 		stopPolling()
 		stopWatch()
 		if socketClient then
+			suppressNextSocketCloseOutput = true
 			socketClient:close()
 			socketClient = nil
 		end
 		setStatus("disconnected")
 		appendLog("Disconnected from RoSync.")
+		writeStudioOutput("Connection lost from RoSync daemon.")
 	end
 	
 	connectToggleButton.MouseButton1Click:Connect(function()
@@ -971,6 +982,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	refreshConnectToggle()
 	setStatus("disconnected")
 	appendLog("RoSync plugin ready.")
+	writeStudioOutput("RoSync plugin ready.")
 	
 end
 
