@@ -560,6 +560,46 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 	local appendLog = appendInfo
 	
+	local function isSyncAllowed(actionLabel)
+		if Listener.isSyncAllowed() then
+			return true
+		end
+	
+		appendInfo((actionLabel or "Sync") .. " is disabled while Studio is running. Stop playtest and try again.", "warn")
+		return false
+	end
+	
+	local function shouldSyncInstance(instance)
+		return Listener.shouldSyncInstance(instance, function(target)
+			return target ~= nil and target ~= game and not applyInProgress
+		end)
+	end
+	
+	local function safeGetChildren(instance)
+		local success, children = pcall(function()
+			return instance:GetChildren()
+		end)
+		return (success and type(children) == "table") and children or {}
+	end
+	
+	local function serializeSyncTree(instance)
+		if not shouldSyncInstance(instance) then
+			return nil
+		end
+	
+		local serialized = Serializer.serializeInstance(instance, false)
+		serialized.children = {}
+	
+		for _, child in ipairs(safeGetChildren(instance)) do
+			local childSerialized = serializeSyncTree(child)
+			if childSerialized then
+				table.insert(serialized.children, childSerialized)
+			end
+		end
+	
+		return serialized
+	end
+	
 	local function setStatus(text, color)
 		statusLabel.Text = text
 		statusPill.BackgroundColor3 = color
@@ -896,7 +936,11 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 	
 	local function pushInstance(instance, action, shouldLogEvent)
-		local serialized = Serializer.serializeInstance(instance, true)
+		local serialized = serializeSyncTree(instance)
+		if not serialized then
+			return false
+		end
+	
 		local instancePath = PathUtil.getInstancePath(instance)
 		local sent = sendMessage({
 			type = "SYNC_INSTANCE",
@@ -907,9 +951,15 @@ __modules['main.client'] = function(moduleRequire, script)
 		if sent and shouldLogEvent then
 			appendEvent("studio", action or "update", instancePath)
 		end
+	
+		return sent
 	end
 	
 	pushServices = function()
+		if not isSyncAllowed("Push All") then
+			return
+		end
+	
 		local pushedCount = 0
 	
 		for _, serviceName in ipairs(SERVICE_NAMES) do
@@ -927,6 +977,10 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 	
 	local function startWatch()
+		if not isSyncAllowed("Start Watch") then
+			return
+		end
+	
 		if stopWatching then
 			appendLog("Watch is already running.")
 			return
@@ -1003,12 +1057,20 @@ __modules['main.client'] = function(moduleRequire, script)
 	end)
 	
 	buttons["Pull All"].MouseButton1Click:Connect(function()
+		if not isSyncAllowed("Pull All") then
+			return
+		end
+	
 		sendMessage({
 			type = "PULL_REQUEST",
 		})
 	end)
 	
 	buttons["Push Selection"].MouseButton1Click:Connect(function()
+		if not isSyncAllowed("Push Selection") then
+			return
+		end
+	
 		local selected = refreshSelection()
 		if selected then
 			pushInstance(selected, "update", true)
@@ -1321,10 +1383,82 @@ end
 
 __modules['sync/Listener'] = function(moduleRequire, script)
 	local require = moduleRequire
+	local RunService = game:GetService("RunService")
 	local PathUtil = require(script.Parent.Parent.util.PathUtil)
 	
 	local Listener = {}
 	local DEFAULT_DEBOUNCE_SECONDS = 0.15
+	
+	local BLOCKED_SERVICES = {
+		CoreGui = true,
+		RobloxPluginGuiService = true,
+		PluginGuiService = true,
+		CorePackages = true,
+		StudioService = true,
+		ScriptEditorService = true,
+		PluginDebugService = true,
+		PluginPoliciesService = true,
+		UserInputService = true,
+		GuiService = true,
+		NetworkClient = true,
+		NetworkServer = true,
+		RobloxReplicatedStorage = true,
+		FriendService = true,
+		MarketplaceService = true,
+		AnalyticsService = true,
+		VoiceChatService = true,
+		PolicyService = true,
+		HttpRbxApiService = true,
+		NotificationService = true,
+		BadgeService = true,
+		KeyframeSequenceProvider = true,
+	}
+	
+	local function isRuntimePlayerInstance(instance)
+		local parent = instance.Parent
+		if parent and parent.ClassName == "Players" then
+			return instance:IsA("Player")
+		end
+	
+		return false
+	end
+	
+	local function isBlockedService(instance)
+		local current = instance
+		while current.Parent ~= game and current.Parent ~= nil do
+			current = current.Parent
+		end
+	
+		return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
+	end
+	
+	function Listener.isSyncAllowed()
+		return not RunService:IsRunning()
+	end
+	
+	function Listener.shouldSyncInstance(instance, shouldSync)
+		if instance == nil or instance == game then
+			return false
+		end
+	
+		if not Listener.isSyncAllowed() then
+			return false
+		end
+	
+		if isBlockedService(instance) then
+			return false
+		end
+	
+		if isRuntimePlayerInstance(instance) then
+			return false
+		end
+	
+		if type(shouldSync) == "function" then
+			return shouldSync(instance)
+		end
+	
+		return true
+	end
 	
 	function Listener.attach(shouldSync, callbacks, options)
 		local connections = {}
@@ -1366,7 +1500,7 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			pendingThreads[instance] = task.delay(debounceSeconds, function()
 				pendingThreads[instance] = nil
 				local currentPath = PathUtil.getInstancePath(instance)
-				if not shouldSync(instance) then
+				if not Listener.shouldSyncInstance(instance, shouldSync) then
 					lastKnownPaths[instance] = currentPath
 					return
 				end
@@ -1383,7 +1517,11 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			end)
 		end
 	
-		local function watchInstance(instance)
+		local function connectInstance(instance)
+			if not Listener.isSyncAllowed() then
+				return
+			end
+	
 			if changedConnections[instance] or nameChangedConnections[instance] then
 				return
 			end
@@ -1407,22 +1545,22 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 	
 		local function onAdded(instance)
 			lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
-			if shouldSync(instance) and callbacks.onAdded then
+			if Listener.shouldSyncInstance(instance, shouldSync) and callbacks.onAdded then
 				callbacks.onAdded(instance)
 			end
-			watchInstance(instance)
+			connectInstance(instance)
 		end
 	
 		local function onRemoving(instance)
 			local previousPath = lastKnownPaths[instance] or PathUtil.getInstancePath(instance)
-			if shouldSync(instance) and callbacks.onRemoving then
+			if Listener.shouldSyncInstance(instance, shouldSync) and callbacks.onRemoving then
 				callbacks.onRemoving(instance, previousPath)
 			end
 			unwatchInstance(instance)
 		end
 	
 		for _, descendant in ipairs(game:GetDescendants()) do
-			watchInstance(descendant)
+			connectInstance(descendant)
 		end
 	
 		table.insert(connections, game.DescendantAdded:Connect(onAdded))

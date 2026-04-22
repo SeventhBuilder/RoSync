@@ -515,6 +515,46 @@ end
 
 local appendLog = appendInfo
 
+local function isSyncAllowed(actionLabel)
+	if Listener.isSyncAllowed() then
+		return true
+	end
+
+	appendInfo((actionLabel or "Sync") .. " is disabled while Studio is running. Stop playtest and try again.", "warn")
+	return false
+end
+
+local function shouldSyncInstance(instance)
+	return Listener.shouldSyncInstance(instance, function(target)
+		return target ~= nil and target ~= game and not applyInProgress
+	end)
+end
+
+local function safeGetChildren(instance)
+	local success, children = pcall(function()
+		return instance:GetChildren()
+	end)
+	return (success and type(children) == "table") and children or {}
+end
+
+local function serializeSyncTree(instance)
+	if not shouldSyncInstance(instance) then
+		return nil
+	end
+
+	local serialized = Serializer.serializeInstance(instance, false)
+	serialized.children = {}
+
+	for _, child in ipairs(safeGetChildren(instance)) do
+		local childSerialized = serializeSyncTree(child)
+		if childSerialized then
+			table.insert(serialized.children, childSerialized)
+		end
+	end
+
+	return serialized
+end
+
 local function setStatus(text, color)
 	statusLabel.Text = text
 	statusPill.BackgroundColor3 = color
@@ -851,7 +891,11 @@ connectSocket = function(isReconnect)
 end
 
 local function pushInstance(instance, action, shouldLogEvent)
-	local serialized = Serializer.serializeInstance(instance, true)
+	local serialized = serializeSyncTree(instance)
+	if not serialized then
+		return false
+	end
+
 	local instancePath = PathUtil.getInstancePath(instance)
 	local sent = sendMessage({
 		type = "SYNC_INSTANCE",
@@ -862,9 +906,15 @@ local function pushInstance(instance, action, shouldLogEvent)
 	if sent and shouldLogEvent then
 		appendEvent("studio", action or "update", instancePath)
 	end
+
+	return sent
 end
 
 pushServices = function()
+	if not isSyncAllowed("Push All") then
+		return
+	end
+
 	local pushedCount = 0
 
 	for _, serviceName in ipairs(SERVICE_NAMES) do
@@ -882,6 +932,10 @@ pushServices = function()
 end
 
 local function startWatch()
+	if not isSyncAllowed("Start Watch") then
+		return
+	end
+
 	if stopWatching then
 		appendLog("Watch is already running.")
 		return
@@ -958,12 +1012,20 @@ buttons["Push All"].MouseButton1Click:Connect(function()
 end)
 
 buttons["Pull All"].MouseButton1Click:Connect(function()
+	if not isSyncAllowed("Pull All") then
+		return
+	end
+
 	sendMessage({
 		type = "PULL_REQUEST",
 	})
 end)
 
 buttons["Push Selection"].MouseButton1Click:Connect(function()
+	if not isSyncAllowed("Push Selection") then
+		return
+	end
+
 	local selected = refreshSelection()
 	if selected then
 		pushInstance(selected, "update", true)
