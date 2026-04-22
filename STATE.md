@@ -11,18 +11,18 @@
 
 ## 🔴 Known Broken
 - First Connect wipes Studio instances: the non-destructive connect fix is now committed and pushed in `plugin/src/main.client.luau` and `plugin/src/sync/Deserializer.luau`, but manual Studio verification is still pending before this can move to ✅ working.
-- System services still sync to `src/`: blocked/internal Roblox services like `CoreGui` and `GuiService` are still making it into disk sync paths instead of being hard-blocked, owned by `plugin/src/main.client.luau`, `plugin/src/sync/Listener.luau`, and daemon tree ingestion rules.
-- Runtime `Players` children still sync: live player instances under `Players` are being serialized even though they are runtime-only and should be blocked, owned by `plugin/src/sync/Listener.luau` and plugin-side filtering.
-- `_RoSyncManaged` attribute is written into Studio instances: RoSync is tagging live instances during apply instead of staying invisible, owned by `plugin/src/sync/Deserializer.luau`.
-- Property case duplicates are written to `.instance.json`: duplicate keys such as `Archive` and `archive` can both survive serialization, owned by `plugin/src/sync/Serializer.luau`.
-- Camera `CFrame` pushes back on Pull All and causes Studio glitches: camera state is still being round-tripped when it should be guarded or skipped, owned by `plugin/src/sync/Serializer.luau`, `plugin/src/sync/Listener.luau`, and apply filtering.
-- No `RunService` guard during Play mode: the plugin can still watch/apply during simulation when it should back off, owned by `plugin/src/main.client.luau`.
-- `rosync update` fails on Windows when `npm` is not on PATH: update flow still assumes `npm` resolution that does not hold on some Windows setups, owned by `daemon/src/cli/update.ts` and Windows install/update flow.
 - VS Code Explorer has no Roblox class icons: Explorer icon fidelity is still below prompt spec and is treated as broken, owned by `extension/src/explorer/IconMapper.ts` and `extension/src/explorer/ExplorerProvider.ts`.
 
 ## 🟡 Partial / Needs Work
+- Local plugin distribution mismatch was confirmed on 2026-04-22: the repo bundle had newer fixes, but `C:\Users\Dyu\RoSync\plugin\RoSync.plugin.luau` and `%LOCALAPPDATA%\Roblox\Plugins\RoSync.plugin.lua` were still older copies. Those local copies have now been synchronized with the repo bundle, so any plugin behavior observed before that sync must be re-tested before it is treated as a current code bug.
 - Sync engine: the daemon has real diffing, rename detection, echo suppression, and conflict tracking, but deeper reconciliation heuristics, broader integration coverage, and prompt-grade conflict UX are still missing.
 - Roblox Studio plugin: transport, watch, pull/apply, and serializer foundations exist, but end-to-end safety, blocked-service enforcement, Play-mode guards, and verified full-property coverage are still incomplete.
+- Blocked services and runtime `Players` filtering are committed in code, including `PluginGuiService` remaining blocked and `TextChatService` remaining allowed, but still need Studio verification against the updated installed plugin before they can move to ✅ working.
+- `_RoSyncManaged` attribute pollution is removed in current deserializer code, but old `.instance.json` files or Studio state may still contain stale data from earlier runs until they are rewritten or cleaned.
+- Property-name case deduplication is implemented for new serializer output, but older `.instance.json` files can still contain stale duplicate keys such as `Archive` and `archive` until they are regenerated.
+- `Workspace/Camera` is treated as read-only in current code so it can serialize to disk without being pushed back into Studio, but the camera-glitch behavior still needs Studio verification against the updated installed plugin.
+- RunService play-mode guarding is implemented in current plugin code for watch/push/pull paths, but still needs Studio verification against the updated installed plugin.
+- `rosync update` has Windows npm-path fallback logic in code now, but still needs a fresh manual Windows update run before it can move to ✅ working.
 - Rename in Studio -> disk propagation is now committed and pushed, but still needs end-to-end Studio verification before it can move to ✅ working; owned by `plugin/src/sync/Listener.luau`, `plugin/src/main.client.luau`, and `daemon/src/sync/engine.ts`.
 - Plugin UI redesign is now committed and pushed with a single Connect/Disconnect toggle and no Start Watch button, but still needs Studio verification before it can move to ✅ working; owned by `plugin/src/main.client.luau`.
 - VS Code extension: Explorer and status panels are live, but the property panel, conflict diff UX, Git history panel, AI agent log/context generation, and polished icon/state behavior are still incomplete at the repo level.
@@ -32,9 +32,8 @@
 ## ❌ Not Started
 - MCP server and AI Agent Mode: high priority — prompt requires tool/context generation and MCP exposure, but repo support is still missing.
 - Full conflict-resolution UI in the editor: high priority — prompt calls for a real VS Code diff-driven conflict flow that does not exist yet.
-- `.rbxm` / Creator Store packaging flow: medium priority — local bundled plugin exists, but release packaging is not built out.
 - Full docs site parity for Section 8: medium priority — documentation structure exists, but large portions of the spec’s written content are still absent.
 - Fresh-machine gate verification for Phases 8–10: medium priority — installers and update/uninstall need a full clean-environment proof pass.
 
 ## 📋 Current Focus
-Run manual Studio verification for the published first-connect wipe fix, the rename-sync path, and the redesigned Studio plugin UI, then continue down the remaining broken list.
+Re-test the updated installed Studio plugin after the local plugin-copy sync, focusing first on first-connect safety, blocked-service/runtime-player filtering, camera behavior, rename propagation, and the redesigned UI.
