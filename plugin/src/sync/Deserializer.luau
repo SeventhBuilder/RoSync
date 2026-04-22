@@ -3,7 +3,6 @@ local CollectionService = game:GetService("CollectionService")
 
 local Deserializer = {}
 
-local MANAGED_ATTRIBUTE = "_RoSyncManaged"
 local READ_ONLY_INSTANCES = {
 	["Workspace/Camera"] = true,
 }
@@ -270,7 +269,7 @@ local function applyAttributesExact(instance, attributes)
 	end
 
 	for key in pairs(instance:GetAttributes()) do
-		if key ~= MANAGED_ATTRIBUTE and not desired[key] then
+		if string.sub(key, 1, 7) == "_RoSync" or not desired[key] then
 			pcall(function()
 				instance:SetAttribute(key, nil)
 			end)
@@ -361,9 +360,6 @@ local function applyNode(instance, node, nodePath)
 	end
 
 	instance.Name = node.name
-	pcall(function()
-		instance:SetAttribute(MANAGED_ATTRIBUTE, true)
-	end)
 
 	applyAttributesExact(instance, node.attributes)
 	applyTagsExact(instance, node.tags)
@@ -419,9 +415,6 @@ local function applyServiceNode(serviceNode)
 		return false, "Missing service " .. tostring(serviceNode.name)
 	end
 
-	pcall(function()
-		service:SetAttribute(MANAGED_ATTRIBUTE, true)
-	end)
 	applyAttributesExact(service, serviceNode.attributes)
 	applyTagsExact(service, serviceNode.tags)
 	applyProperties(service, serviceNode)
@@ -512,9 +505,6 @@ local function ensureParentForPath(pathValue)
 		if not child then
 			child = Instance.new("Folder")
 			child.Name = segment
-			pcall(function()
-				child:SetAttribute(MANAGED_ATTRIBUTE, true)
-			end)
 			child.Parent = current
 		end
 		current = child
@@ -638,7 +628,6 @@ function Deserializer.renameAtPath(oldPath, newPath)
 			instance.Parent = nextParent
 		end
 		instance.Name = segments[#segments]
-		instance:SetAttribute(MANAGED_ATTRIBUTE, true)
 	end)
 
 	ChangeHistoryService:SetWaypoint("After RoSync Rename")

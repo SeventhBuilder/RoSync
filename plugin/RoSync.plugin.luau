@@ -1885,7 +1885,6 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 	local Deserializer = {}
 	
-	local MANAGED_ATTRIBUTE = "_RoSyncManaged"
 	local READ_ONLY_INSTANCES = {
 		["Workspace/Camera"] = true,
 	}
@@ -2152,7 +2151,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	
 		for key in pairs(instance:GetAttributes()) do
-			if key ~= MANAGED_ATTRIBUTE and not desired[key] then
+			if string.sub(key, 1, 7) == "_RoSync" or not desired[key] then
 				pcall(function()
 					instance:SetAttribute(key, nil)
 				end)
@@ -2243,9 +2242,6 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	
 		instance.Name = node.name
-		pcall(function()
-			instance:SetAttribute(MANAGED_ATTRIBUTE, true)
-		end)
 	
 		applyAttributesExact(instance, node.attributes)
 		applyTagsExact(instance, node.tags)
@@ -2301,9 +2297,6 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			return false, "Missing service " .. tostring(serviceNode.name)
 		end
 	
-		pcall(function()
-			service:SetAttribute(MANAGED_ATTRIBUTE, true)
-		end)
 		applyAttributesExact(service, serviceNode.attributes)
 		applyTagsExact(service, serviceNode.tags)
 		applyProperties(service, serviceNode)
@@ -2394,9 +2387,6 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			if not child then
 				child = Instance.new("Folder")
 				child.Name = segment
-				pcall(function()
-					child:SetAttribute(MANAGED_ATTRIBUTE, true)
-				end)
 				child.Parent = current
 			end
 			current = child
@@ -2520,7 +2510,6 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				instance.Parent = nextParent
 			end
 			instance.Name = segments[#segments]
-			instance:SetAttribute(MANAGED_ATTRIBUTE, true)
 		end)
 	
 		ChangeHistoryService:SetWaypoint("After RoSync Rename")
