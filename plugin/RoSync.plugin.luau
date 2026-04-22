@@ -1682,13 +1682,16 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 		end
 	
 		local names = {}
+		local seenLowercaseNames = {}
 		for _, prop in ipairs(props) do
 			local name = prop.Name
 			if type(name) == "string" and not PROPERTY_DENYLIST[name] then
 				local canWrite = prop.Permits == nil
 					or prop.Permits.Write ~= nil
 					or prop.Permits.WriteParallel ~= nil
-				if canWrite then
+				local lowercaseName = string.lower(name)
+				if canWrite and not seenLowercaseNames[lowercaseName] then
+					seenLowercaseNames[lowercaseName] = true
 					table.insert(names, name)
 				end
 			end
