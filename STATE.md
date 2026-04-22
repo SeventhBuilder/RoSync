@@ -16,16 +16,15 @@
 - `_RoSyncManaged` attribute is written into Studio instances: RoSync is tagging live instances during apply instead of staying invisible, owned by `plugin/src/sync/Deserializer.luau`.
 - Property case duplicates are written to `.instance.json`: duplicate keys such as `Archive` and `archive` can both survive serialization, owned by `plugin/src/sync/Serializer.luau`.
 - Camera `CFrame` pushes back on Pull All and causes Studio glitches: camera state is still being round-tripped when it should be guarded or skipped, owned by `plugin/src/sync/Serializer.luau`, `plugin/src/sync/Listener.luau`, and apply filtering.
-- Rename in Studio does not reliably update disk: Studio-side rename propagation is still considered broken until end-to-end verification proves disk rename behavior is stable, owned by `plugin/src/sync/Listener.luau`, `plugin/src/main.client.luau`, and `daemon/src/sync/engine.ts`.
 - No `RunService` guard during Play mode: the plugin can still watch/apply during simulation when it should back off, owned by `plugin/src/main.client.luau`.
-- Connect and Disconnect are separate buttons: the plugin UI still uses separate controls instead of the prompt’s single toggle behavior, owned by `plugin/src/main.client.luau`.
-- Start Watch button is redundant: watch activation is still exposed as a separate button even though the prompt wants it removed from the final UI, owned by `plugin/src/main.client.luau`.
 - `rosync update` fails on Windows when `npm` is not on PATH: update flow still assumes `npm` resolution that does not hold on some Windows setups, owned by `daemon/src/cli/update.ts` and Windows install/update flow.
 - VS Code Explorer has no Roblox class icons: Explorer icon fidelity is still below prompt spec and is treated as broken, owned by `extension/src/explorer/IconMapper.ts` and `extension/src/explorer/ExplorerProvider.ts`.
 
 ## 🟡 Partial / Needs Work
 - Sync engine: the daemon has real diffing, rename detection, echo suppression, and conflict tracking, but deeper reconciliation heuristics, broader integration coverage, and prompt-grade conflict UX are still missing.
 - Roblox Studio plugin: transport, watch, pull/apply, and serializer foundations exist, but end-to-end safety, blocked-service enforcement, Play-mode guards, and verified full-property coverage are still incomplete.
+- Rename in Studio -> disk propagation is now committed and pushed, but still needs end-to-end Studio verification before it can move to ✅ working; owned by `plugin/src/sync/Listener.luau`, `plugin/src/main.client.luau`, and `daemon/src/sync/engine.ts`.
+- Plugin UI redesign is now committed and pushed with a single Connect/Disconnect toggle and no Start Watch button, but still needs Studio verification before it can move to ✅ working; owned by `plugin/src/main.client.luau`.
 - VS Code extension: Explorer and status panels are live, but the property panel, conflict diff UX, Git history panel, AI agent log/context generation, and polished icon/state behavior are still incomplete at the repo level.
 - Docs/tutorial parity: README, architecture, testing, and docs scaffolding exist, but the full tutorial, troubleshooting, schema reference, and broader Docusaurus parity with the prompt are still unfinished.
 - Install/release flow: source installers and uninstallers exist, but full fresh-machine verification, extension packaging automation, and release-grade parity still need work.
@@ -38,4 +37,4 @@
 - Fresh-machine gate verification for Phases 8–10: medium priority — installers and update/uninstall need a full clean-environment proof pass.
 
 ## 📋 Current Focus
-Run manual Studio verification for the published first-connect wipe fix, then continue down the broken list with blocked-service filtering and runtime `Players` exclusions.
+Run manual Studio verification for the published first-connect wipe fix, the rename-sync path, and the redesigned Studio plugin UI, then continue down the remaining broken list.
