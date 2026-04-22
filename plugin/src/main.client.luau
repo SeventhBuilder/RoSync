@@ -57,7 +57,8 @@ local EVENT_COLOR = {
 	add = "rgb(34,197,94)",
 	update = "rgb(234,179,8)",
 	remove = "rgb(239,68,68)",
-	rename = "rgb(234,179,8)",
+	rename = "rgb(255,255,255)",
+	move = "rgb(59,130,246)",
 	info = "rgb(156,163,175)",
 	error = "rgb(248,113,113)",
 	source = "rgb(148,163,184)",
@@ -68,7 +69,8 @@ local EVENT_PREFIX = {
 	add = "+",
 	update = "~",
 	remove = "-",
-	rename = "~",
+	rename = "→",
+	move = "⇄",
 	info = "·",
 	error = "!",
 }
@@ -280,6 +282,28 @@ local function originLabel(origin)
 	return "Disk"
 end
 
+local function parentPathOf(pathValue)
+	if type(pathValue) ~= "string" then
+		return ""
+	end
+
+	local segments = string.split(pathValue, "/")
+	if #segments <= 1 then
+		return ""
+	end
+
+	table.remove(segments, #segments)
+	return table.concat(segments, "/")
+end
+
+local function classifyPathMutation(oldPath, newPath)
+	if parentPathOf(oldPath) ~= parentPathOf(newPath) then
+		return "move"
+	end
+
+	return "rename"
+end
+
 local function scrollLogToBottom()
 	task.defer(function()
 		local maxPosition = math.max(0, logScrollFrame.AbsoluteCanvasSize.Y - logScrollFrame.AbsoluteWindowSize.Y)
@@ -326,7 +350,7 @@ local function appendEvent(origin, action, pathValue, extraPath)
 	local source = originLabel(origin)
 	local actionText = EVENT_PREFIX[eventType]
 	local actionColor = EVENT_COLOR[eventType] or EVENT_COLOR.update
-	local fullPath = extraPath and (tostring(pathValue) .. " -> " .. tostring(extraPath)) or tostring(pathValue)
+	local fullPath = extraPath and (tostring(pathValue) .. " → " .. tostring(extraPath)) or tostring(pathValue)
 	local richText = string.format(
 		'<font color="%s"><b>%s</b></font> <font color="%s">[%s]</font> <font color="%s">%s</font>',
 		actionColor,
@@ -648,7 +672,7 @@ local function handleSocketMessage(message)
 		applyInProgress = false
 
 		if renamed then
-			appendEvent(payload.origin, "rename", payload.oldPath, payload.newPath)
+			appendEvent(payload.origin, classifyPathMutation(payload.oldPath, payload.newPath), payload.oldPath, payload.newPath)
 		else
 			appendInfo("Rename failed for " .. payload.oldPath .. ": " .. tostring(renameError), "warn")
 		end
@@ -820,7 +844,7 @@ local function startWatch()
 				data = serialized,
 			})
 			if sent then
-				appendEvent("studio", "rename", oldPath, newPath)
+				appendEvent("studio", classifyPathMutation(oldPath, newPath), oldPath, newPath)
 			end
 		end,
 		onRemoving = function(_, previousPath)
