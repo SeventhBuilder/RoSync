@@ -2148,92 +2148,6 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		return nil
 	end
 	
-	local function applyNode(instance, node, nodePath)
-		if isReadOnlyPath(nodePath) then
-			return true
-		end
-	
-		instance.Name = node.name
-	
-		applyAttributesExact(instance, node.attributes)
-		applyTagsExact(instance, node.tags)
-		local deferredPrimaryPart = applyProperties(instance, node)
-	
-		local matchedChildren = {}
-		for _, childNode in ipairs(node.children or {}) do
-			local childPath = joinPath(nodePath, childNode.name)
-			if isReadOnlyPath(childPath) then
-				continue
-			end
-	
-			local childInstance = findCandidateChild(instance, childNode)
-			if not childInstance then
-				childInstance = createInstanceForNode(childNode)
-				childInstance.Name = childNode.name
-				childInstance.Parent = instance
-			end
-	
-			matchedChildren[childInstance] = true
-			applyNode(childInstance, childNode, childPath)
-		end
-	
-		if type(deferredPrimaryPart) == "table" then
-			local referenceValue = deferredPrimaryPart.value or deferredPrimaryPart.Value or deferredPrimaryPart
-			local targetName = type(referenceValue) == "table" and referenceValue.name or nil
-			if type(targetName) == "string" and targetName ~= "" then
-				local target = instance:FindFirstChild(targetName, true)
-				if target then
-					pcall(function()
-						instance.PrimaryPart = target
-					end)
-				end
-			end
-		end
-	end
-	
-	local function getServiceRoot(serviceName)
-		local success, service = pcall(function()
-			return game:GetService(serviceName)
-		end)
-	
-		if success then
-			return service
-		end
-	
-		return game:FindFirstChild(serviceName)
-	end
-	
-	local function applyServiceNode(serviceNode)
-		local service = getServiceRoot(serviceNode.name)
-		if not service then
-			return false, "Missing service " .. tostring(serviceNode.name)
-		end
-	
-		applyAttributesExact(service, serviceNode.attributes)
-		applyTagsExact(service, serviceNode.tags)
-		applyProperties(service, serviceNode)
-	
-		local matchedChildren = {}
-		for _, childNode in ipairs(serviceNode.children or {}) do
-			local childPath = joinPath(serviceNode.name, childNode.name)
-			if isReadOnlyPath(childPath) then
-				continue
-			end
-	
-			local childInstance = findCandidateChild(service, childNode)
-			if not childInstance then
-				childInstance = createInstanceForNode(childNode)
-				childInstance.Name = childNode.name
-				childInstance.Parent = service
-			end
-	
-			matchedChildren[childInstance] = true
-			applyNode(childInstance, childNode, childPath)
-		end
-	
-		return true
-	end
-	
 	local function splitPath(pathValue)
 		local segments = {}
 		if type(pathValue) ~= "string" or pathValue == "" then
@@ -2259,6 +2173,18 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 	local function isReadOnlyPath(pathValue)
 		return READ_ONLY_INSTANCES[pathValue] == true
+	end
+	
+	local function getServiceRoot(serviceName)
+		local success, service = pcall(function()
+			return game:GetService(serviceName)
+		end)
+	
+		if success then
+			return service
+		end
+	
+		return game:FindFirstChild(serviceName)
 	end
 	
 	local function findInstanceByPath(pathValue)
@@ -2305,6 +2231,66 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	
 		return current
+	end
+	
+	local applyNode
+	
+	local function applyChildrenRecursive(parentInstance, parentPath, childNodes)
+		for _, childNode in ipairs(childNodes or {}) do
+			local childPath = joinPath(parentPath, childNode.name)
+			if isReadOnlyPath(childPath) then
+				continue
+			end
+	
+			local childInstance = findCandidateChild(parentInstance, childNode)
+			if not childInstance then
+				childInstance = createInstanceForNode(childNode)
+				childInstance.Name = childNode.name
+				childInstance.Parent = parentInstance
+			end
+	
+			applyNode(childInstance, childNode, childPath)
+		end
+	end
+	
+	applyNode = function(instance, node, nodePath)
+		if isReadOnlyPath(nodePath) then
+			return true
+		end
+	
+		instance.Name = node.name
+	
+		applyAttributesExact(instance, node.attributes)
+		applyTagsExact(instance, node.tags)
+		local deferredPrimaryPart = applyProperties(instance, node)
+		applyChildrenRecursive(instance, nodePath, node.children)
+	
+		if type(deferredPrimaryPart) == "table" then
+			local referenceValue = deferredPrimaryPart.value or deferredPrimaryPart.Value or deferredPrimaryPart
+			local targetName = type(referenceValue) == "table" and referenceValue.name or nil
+			if type(targetName) == "string" and targetName ~= "" then
+				local target = instance:FindFirstChild(targetName, true)
+				if target then
+					pcall(function()
+						instance.PrimaryPart = target
+					end)
+				end
+			end
+		end
+	end
+	
+	local function applyServiceNode(serviceNode)
+		local service = getServiceRoot(serviceNode.name)
+		if not service then
+			return false, "Missing service " .. tostring(serviceNode.name)
+		end
+	
+		applyAttributesExact(service, serviceNode.attributes)
+		applyTagsExact(service, serviceNode.tags)
+		applyProperties(service, serviceNode)
+		applyChildrenRecursive(service, serviceNode.name, serviceNode.children)
+	
+		return true
 	end
 	
 	function Deserializer.applySyncInstance(pathValue, node)
