@@ -336,11 +336,6 @@ local function applyProperties(instance, node)
 	return deferredPrimaryPart
 end
 
-local function isManaged(instance)
-	local value = instance:GetAttribute(MANAGED_ATTRIBUTE)
-	return value == true
-end
-
 local function findCandidateChild(parent, node)
 	local existing = parent:FindFirstChild(node.name)
 	if not existing then
@@ -378,14 +373,6 @@ local function applyNode(instance, node)
 
 		matchedChildren[childInstance] = true
 		applyNode(childInstance, childNode)
-	end
-
-	for _, child in ipairs(instance:GetChildren()) do
-		if not matchedChildren[child] and isManaged(child) then
-			pcall(function()
-				child:Destroy()
-			end)
-		end
 	end
 
 	if type(deferredPrimaryPart) == "table" then
@@ -438,14 +425,6 @@ local function applyServiceNode(serviceNode)
 
 		matchedChildren[childInstance] = true
 		applyNode(childInstance, childNode)
-	end
-
-	for _, child in ipairs(service:GetChildren()) do
-		if not matchedChildren[child] and isManaged(child) then
-			pcall(function()
-				child:Destroy()
-			end)
-		end
 	end
 
 	return true

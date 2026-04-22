@@ -399,6 +399,24 @@ local pollingThread = nil
 local connectSocket
 local pushServices
 
+local function daemonIndexedInstanceCount(statusResponse)
+	if type(statusResponse) ~= "table" then
+		return nil
+	end
+
+	local summary = statusResponse.summary
+	if type(summary) == "table" and type(summary.indexedInstances) == "number" then
+		return summary.indexedInstances
+	end
+
+	local runtime = statusResponse.runtime
+	if type(runtime) == "table" and type(runtime.summary) == "table" and type(runtime.summary.indexedInstances) == "number" then
+		return runtime.summary.indexedInstances
+	end
+
+	return nil
+end
+
 local function writeOutput(message, level)
 	local formatted = "[RoSync Plugin] " .. tostring(message)
 	if level == "warn" or level == "error" then
@@ -616,6 +634,24 @@ local function fetchAndApplyTree(reason)
 	end
 end
 
+local function syncAfterHandshake()
+	httpClient:setBaseUrl(currentServerUrl())
+
+	local statusOk, statusResponse = httpClient:request("GET", "/status")
+	if statusOk then
+		local indexedInstances = daemonIndexedInstanceCount(statusResponse)
+		if indexedInstances == 0 then
+			appendInfo("Daemon has 0 indexed instances — pulling Studio state to disk instead of applying empty daemon state.")
+			pushServices()
+			return
+		end
+	elseif statusResponse ~= nil then
+		appendInfo("Status check failed during connect: " .. tostring(statusResponse), "warn")
+	end
+
+	fetchAndApplyTree("welcome")
+end
+
 local function startPolling(reason)
 	if pollingThread then
 		return
@@ -660,7 +696,7 @@ local function handleSocketMessage(message)
 		reconnectAttempt = 0
 		stopPolling()
 		appendInfo("Daemon handshake complete. Studio is now connected over WebSocket.")
-		fetchAndApplyTree("welcome")
+		syncAfterHandshake()
 		return
 	end
 
