@@ -44,9 +44,18 @@ function executableName(command: string): string {
 function getWindowsNpmFallbacks(): string[] {
   const fallbacks = new Set<string>();
   const env = process.env;
-  const candidateRoots = [env.ProgramFiles, env["ProgramFiles(x86)"], env.LocalAppData, env.APPDATA].filter(
+  const executableDirectory = path.dirname(process.execPath);
+  const candidateRoots = [
+    env.ProgramW6432,
+    env.ProgramFiles,
+    env["ProgramFiles(x86)"],
+    env.LocalAppData,
+    env.APPDATA,
+  ].filter(
     (value): value is string => typeof value === "string" && value.length > 0,
   );
+
+  fallbacks.add(path.join(executableDirectory, "npm.cmd"));
 
   for (const root of candidateRoots) {
     fallbacks.add(path.join(root, "nodejs", "npm.cmd"));
