@@ -26,6 +26,8 @@ rosync watch
 \`\`\`
 `;
 
+const INIT_SCAFFOLD_SERVICES = Array.from(new Set([...DEFAULT_SERVICES, "TextChatService"]));
+
 const EMPTY_INSTANCE = (className: string) =>
   JSON.stringify(
     {
@@ -57,7 +59,7 @@ export async function ensureServiceSkeletons(targetDir: string, srcPath: string)
   const changes: string[] = [];
   await fs.mkdir(srcPath, { recursive: true });
 
-  for (const serviceName of DEFAULT_SERVICES) {
+  for (const serviceName of INIT_SCAFFOLD_SERVICES) {
     const serviceDir = path.join(srcPath, serviceName);
     await fs.mkdir(serviceDir, { recursive: true });
     await writeFileIfMissing(targetDir, path.join(serviceDir, ".instance.json"), EMPTY_INSTANCE(serviceName), changes);
