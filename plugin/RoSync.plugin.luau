@@ -44,7 +44,6 @@ end
 __modules['main.client'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local HttpService = game:GetService("HttpService")
-	local Selection = game:GetService("Selection")
 
 	local HttpClient = require(script.Parent.network.HttpClient)
 	local WebSocketClient = require(script.Parent.network.WebSocketClient)
@@ -85,45 +84,38 @@ __modules['main.client'] = function(moduleRequire, script)
 	local widget = plugin:CreateDockWidgetPluginGui("RoSyncDock", widgetInfo)
 	widget.Title = "RoSync"
 
-	local SURFACE_COLOR = Color3.fromRGB(26, 32, 43)
-	local PANEL_COLOR = Color3.fromRGB(18, 23, 33)
-	local PANEL_BORDER = Color3.fromRGB(45, 56, 74)
+	local ROOT_COLOR = Color3.fromRGB(18, 18, 28)
+	local HEADER_COLOR = Color3.fromRGB(24, 24, 38)
+	local PANEL_COLOR = Color3.fromRGB(28, 28, 42)
+	local PANEL_BORDER = Color3.fromRGB(45, 55, 72)
 	local TEXT_PRIMARY = Color3.fromRGB(241, 245, 249)
-	local TEXT_SECONDARY = Color3.fromRGB(148, 163, 184)
-	local STATUS_OFFLINE = Color3.fromRGB(211, 74, 74)
-	local STATUS_WARN = Color3.fromRGB(234, 179, 8)
-	local STATUS_ONLINE = Color3.fromRGB(34, 197, 94)
+	local STATUS_CONNECTED = Color3.fromRGB(34, 197, 94)
+	local STATUS_DISCONNECTED = Color3.fromRGB(239, 68, 68)
+	local STATUS_CONFLICT = Color3.fromRGB(234, 179, 8)
+	local CONNECT_BLUE = Color3.fromRGB(59, 130, 246)
+	local DISCONNECT_RED = Color3.fromRGB(239, 68, 68)
+	local PUSH_ORANGE = Color3.fromRGB(249, 115, 22)
+	local PULL_PURPLE = Color3.fromRGB(168, 85, 247)
+	local STATUS_GRAY = Color3.fromRGB(107, 114, 128)
 
 	local EVENT_COLOR = {
 		add = "rgb(34,197,94)",
 		update = "rgb(234,179,8)",
 		remove = "rgb(239,68,68)",
 		rename = "rgb(234,179,8)",
-		info = "rgb(148,163,184)",
+		info = "rgb(156,163,175)",
 		error = "rgb(248,113,113)",
-		time = "rgb(100,116,139)",
 		source = "rgb(148,163,184)",
 		path = "rgb(241,245,249)",
 	}
 
 	local EVENT_PREFIX = {
-		add = "+ Add",
-		update = "~ Update",
-		remove = "- Remove",
-		rename = "~ Rename",
-		info = ".",
+		add = "+",
+		update = "~",
+		remove = "-",
+		rename = "~",
+		info = "·",
 		error = "!",
-	}
-
-	local ACTION_BUTTON_STYLES = {
-		Connect = Color3.fromRGB(37, 99, 235),
-		["Start Watch"] = Color3.fromRGB(22, 163, 74),
-		["Push All"] = Color3.fromRGB(234, 88, 12),
-		["Pull All"] = Color3.fromRGB(8, 145, 178),
-		["Push Selection"] = Color3.fromRGB(124, 58, 237),
-		Status = Color3.fromRGB(71, 85, 105),
-		Refresh = Color3.fromRGB(79, 70, 229),
-		Disconnect = Color3.fromRGB(220, 38, 38),
 	}
 
 	local function escapeRichText(value)
@@ -133,218 +125,57 @@ __modules['main.client'] = function(moduleRequire, script)
 		return value
 	end
 
-	local function lightenColor(color, amount)
-		return Color3.new(
-			math.clamp(color.R + amount, 0, 1),
-			math.clamp(color.G + amount, 0, 1),
-			math.clamp(color.B + amount, 0, 1)
-		)
-	end
-
-	local root = Instance.new("ScrollingFrame")
+	local root = Instance.new("Frame")
 	root.Size = UDim2.fromScale(1, 1)
-	root.BackgroundColor3 = Color3.fromRGB(14, 19, 28)
+	root.BackgroundColor3 = ROOT_COLOR
 	root.BorderSizePixel = 0
-	root.CanvasSize = UDim2.new(1, 0, 0, 0)
-	root.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	root.ScrollBarThickness = 6
-	root.ScrollBarImageColor3 = Color3.fromRGB(71, 85, 105)
 	root.Parent = widget
 
-	local listLayout = Instance.new("UIListLayout")
-	listLayout.Padding = UDim.new(0, 10)
-	listLayout.Parent = root
-
-	local padding = Instance.new("UIPadding")
-	padding.PaddingTop = UDim.new(0, 12)
-	padding.PaddingBottom = UDim.new(0, 12)
-	padding.PaddingLeft = UDim.new(0, 12)
-	padding.PaddingRight = UDim.new(0, 12)
-	padding.Parent = root
-
-	local function createCard(height)
-		local card = Instance.new("Frame")
-		card.Size = UDim2.new(1, -6, 0, height)
-		card.BackgroundColor3 = SURFACE_COLOR
-		card.BorderSizePixel = 0
-		card.Parent = root
-
-		local stroke = Instance.new("UIStroke")
-		stroke.Color = PANEL_BORDER
-		stroke.Thickness = 1
-		stroke.Transparency = 0.2
-		stroke.Parent = card
-
+	local function applyCorner(instance)
 		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 10)
-		corner.Parent = card
-
-		return card
+		corner.CornerRadius = UDim.new(0, 6)
+		corner.Parent = instance
 	end
 
-	local function createInset(parent, height)
-		local frame = Instance.new("Frame")
-		frame.Size = UDim2.new(1, 0, 0, height)
-		frame.BackgroundColor3 = PANEL_COLOR
-		frame.BorderSizePixel = 0
-		frame.Parent = parent
-
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 8)
-		corner.Parent = frame
-
-		return frame
+	local function createButton(parent, text, color, position, size)
+		local actionButton = Instance.new("TextButton")
+		actionButton.Position = position
+		actionButton.Size = size
+		actionButton.BackgroundColor3 = color
+		actionButton.BorderSizePixel = 0
+		actionButton.AutoButtonColor = false
+		actionButton.Font = Enum.Font.GothamMedium
+		actionButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+		actionButton.TextSize = 13
+		actionButton.Text = text
+		actionButton.Parent = parent
+		applyCorner(actionButton)
+		return actionButton
 	end
 
-	local function createLegendChip(parent, labelText, rgbText)
-		local chip = Instance.new("Frame")
-		chip.Size = UDim2.new(0, 86, 0, 24)
-		chip.BackgroundColor3 = Color3.fromRGB(31, 41, 55)
-		chip.BorderSizePixel = 0
-		chip.Parent = parent
-
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 999)
-		corner.Parent = chip
-
-		local label = Instance.new("TextLabel")
-		label.Size = UDim2.new(1, -16, 1, 0)
-		label.Position = UDim2.new(0, 8, 0, 0)
-		label.BackgroundTransparency = 1
-		label.Font = Enum.Font.GothamMedium
-		label.Text = labelText
-		label.TextColor3 = TEXT_PRIMARY
-		label.TextSize = 12
-		label.RichText = true
-		label.TextXAlignment = Enum.TextXAlignment.Center
-		label.Parent = chip
-
-		label.Text = string.format('<font color="%s">%s</font>', rgbText, escapeRichText(labelText))
-		return chip
-	end
-
-	local function createServerField(parent, labelText, defaultValue)
-		local label = Instance.new("TextLabel")
-		label.Size = UDim2.new(1, -24, 0, 18)
-		label.Position = UDim2.new(0, 12, 0, 10)
-		label.BackgroundTransparency = 1
-		label.Text = labelText
-		label.TextColor3 = TEXT_SECONDARY
-		label.Font = Enum.Font.GothamMedium
-		label.TextSize = 12
-		label.TextXAlignment = Enum.TextXAlignment.Left
-		label.Parent = parent
-
-		local input = Instance.new("TextBox")
-		input.Size = UDim2.new(1, -24, 0, 34)
-		input.Position = UDim2.new(0, 12, 0, 30)
-		input.BackgroundColor3 = Color3.fromRGB(31, 41, 55)
-		input.BorderSizePixel = 0
-		input.ClearTextOnFocus = false
-		input.Text = defaultValue
-		input.TextColor3 = TEXT_PRIMARY
-		input.Font = Enum.Font.Code
-		input.TextSize = 13
-		input.TextXAlignment = Enum.TextXAlignment.Left
-		input.Parent = parent
-
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0, 8)
-		corner.Parent = input
-
-		local inputPadding = Instance.new("UIPadding")
-		inputPadding.PaddingLeft = UDim.new(0, 10)
-		inputPadding.PaddingRight = UDim.new(0, 10)
-		inputPadding.Parent = input
-
-		return input
-	end
-
-	local function createButtonGrid(parent, labels)
-		local container = Instance.new("Frame")
-		container.Size = UDim2.new(1, -24, 0, 74)
-		container.Position = UDim2.new(0, 12, 0, 14)
-		container.BackgroundTransparency = 1
-		container.Parent = parent
-
-		local layout = Instance.new("UIGridLayout")
-		layout.CellPadding = UDim2.new(0, 8, 0, 8)
-		layout.CellSize = UDim2.new(0.25, -6, 0, 32)
-		layout.Parent = container
-
-		local buttons = {}
-		for _, labelText in ipairs(labels) do
-			local baseColor = ACTION_BUTTON_STYLES[labelText] or Color3.fromRGB(59, 130, 246)
-			local actionButton = Instance.new("TextButton")
-			actionButton.Text = labelText
-			actionButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-			actionButton.TextSize = 13
-			actionButton.Font = Enum.Font.GothamMedium
-			actionButton.AutoButtonColor = false
-			actionButton.BackgroundColor3 = baseColor
-			actionButton.BorderSizePixel = 0
-			actionButton.Parent = container
-
-			local corner = Instance.new("UICorner")
-			corner.CornerRadius = UDim.new(0, 8)
-			corner.Parent = actionButton
-
-			actionButton.MouseEnter:Connect(function()
-				actionButton.BackgroundColor3 = lightenColor(baseColor, 0.05)
-			end)
-
-			actionButton.MouseLeave:Connect(function()
-				actionButton.BackgroundColor3 = baseColor
-			end)
-
-			buttons[labelText] = actionButton
-		end
-
-		return buttons
-	end
-
-	local headerCard = createCard(82)
-	local headerAccent = Instance.new("Frame")
-	headerAccent.Size = UDim2.new(0, 4, 1, -18)
-	headerAccent.Position = UDim2.new(0, 12, 0, 9)
-	headerAccent.BackgroundColor3 = Color3.fromRGB(59, 130, 246)
-	headerAccent.BorderSizePixel = 0
-	headerAccent.Parent = headerCard
-
-	local headerAccentCorner = Instance.new("UICorner")
-	headerAccentCorner.CornerRadius = UDim.new(0, 999)
-	headerAccentCorner.Parent = headerAccent
+	local headerBar = Instance.new("Frame")
+	headerBar.Size = UDim2.new(1, 0, 0, 36)
+	headerBar.BackgroundColor3 = HEADER_COLOR
+	headerBar.BorderSizePixel = 0
+	headerBar.Parent = root
 
 	local titleLabel = Instance.new("TextLabel")
-	titleLabel.Size = UDim2.new(1, -168, 0, 26)
-	titleLabel.Position = UDim2.new(0, 24, 0, 12)
+	titleLabel.Size = UDim2.new(0, 180, 1, 0)
+	titleLabel.Position = UDim2.new(0, 12, 0, 0)
 	titleLabel.BackgroundTransparency = 1
 	titleLabel.Font = Enum.Font.GothamBold
 	titleLabel.Text = "RoSync"
 	titleLabel.TextColor3 = TEXT_PRIMARY
-	titleLabel.TextSize = 20
+	titleLabel.TextSize = 18
 	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-	titleLabel.Parent = headerCard
-
-	local subtitleLabel = Instance.new("TextLabel")
-	subtitleLabel.Size = UDim2.new(1, -168, 0, 30)
-	subtitleLabel.Position = UDim2.new(0, 24, 0, 40)
-	subtitleLabel.BackgroundTransparency = 1
-	subtitleLabel.Font = Enum.Font.Gotham
-	subtitleLabel.Text = "Live Studio, VS Code, and daemon sync with a readable event stream."
-	subtitleLabel.TextWrapped = true
-	subtitleLabel.TextColor3 = TEXT_SECONDARY
-	subtitleLabel.TextSize = 12
-	subtitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-	subtitleLabel.TextYAlignment = Enum.TextYAlignment.Top
-	subtitleLabel.Parent = headerCard
+	titleLabel.Parent = headerBar
 
 	local statusPill = Instance.new("Frame")
 	statusPill.Size = UDim2.new(0, 126, 0, 30)
-	statusPill.Position = UDim2.new(1, -138, 0, 14)
-	statusPill.BackgroundColor3 = Color3.fromRGB(69, 24, 24)
+	statusPill.Position = UDim2.new(1, -138, 0, 3)
+	statusPill.BackgroundColor3 = STATUS_DISCONNECTED
 	statusPill.BorderSizePixel = 0
-	statusPill.Parent = headerCard
+	statusPill.Parent = headerBar
 
 	local statusPillCorner = Instance.new("UICorner")
 	statusPillCorner.CornerRadius = UDim.new(0, 999)
@@ -354,60 +185,71 @@ __modules['main.client'] = function(moduleRequire, script)
 	statusLabel.Size = UDim2.fromScale(1, 1)
 	statusLabel.BackgroundTransparency = 1
 	statusLabel.Font = Enum.Font.GothamMedium
-	statusLabel.Text = "Disconnected"
+	statusLabel.Text = "🔴 Disconnected"
 	statusLabel.TextColor3 = TEXT_PRIMARY
 	statusLabel.TextSize = 12
 	statusLabel.Parent = statusPill
 
-	local serverCard = createCard(74)
-	local serverUrlBox = createServerField(serverCard, "Server URL", DEFAULT_SERVER_URL)
+	local controlsFrame = Instance.new("Frame")
+	controlsFrame.Size = UDim2.new(1, -24, 0, 80)
+	controlsFrame.Position = UDim2.new(0, 12, 0, 48)
+	controlsFrame.BackgroundTransparency = 1
+	controlsFrame.Parent = root
 
-	local controlsCard = createCard(126)
-	local buttons = createButtonGrid(controlsCard, { "Connect", "Start Watch", "Push All", "Pull All", "Push Selection", "Status", "Refresh", "Disconnect" })
+	local connectToggleButton = createButton(
+		controlsFrame,
+		"▶ Connect",
+		CONNECT_BLUE,
+		UDim2.new(0, 0, 0, 0),
+		UDim2.new(1, 0, 0, 34)
+	)
 
-	local selectionLabel = Instance.new("TextLabel")
-	selectionLabel.Size = UDim2.new(1, -24, 0, 28)
-	selectionLabel.Position = UDim2.new(0, 12, 0, 96)
-	selectionLabel.BackgroundTransparency = 1
-	selectionLabel.Font = Enum.Font.Code
-	selectionLabel.Text = "Selection: none"
-	selectionLabel.TextColor3 = TEXT_SECONDARY
-	selectionLabel.TextSize = 12
-	selectionLabel.TextWrapped = true
-	selectionLabel.TextXAlignment = Enum.TextXAlignment.Left
-	selectionLabel.TextYAlignment = Enum.TextYAlignment.Top
-	selectionLabel.Parent = controlsCard
+	local rowFrame = Instance.new("Frame")
+	rowFrame.Size = UDim2.new(1, 0, 0, 34)
+	rowFrame.Position = UDim2.new(0, 0, 0, 46)
+	rowFrame.BackgroundTransparency = 1
+	rowFrame.Parent = controlsFrame
 
-	local logCard = createCard(360)
+	local rowLayout = Instance.new("UIListLayout")
+	rowLayout.FillDirection = Enum.FillDirection.Horizontal
+	rowLayout.Padding = UDim.new(0, 8)
+	rowLayout.Parent = rowFrame
 
-	local logTitle = Instance.new("TextLabel")
-	logTitle.Size = UDim2.new(1, -24, 0, 20)
-	logTitle.Position = UDim2.new(0, 12, 0, 10)
-	logTitle.BackgroundTransparency = 1
-	logTitle.Font = Enum.Font.GothamBold
-	logTitle.Text = "Sync Activity"
-	logTitle.TextColor3 = TEXT_PRIMARY
-	logTitle.TextSize = 14
-	logTitle.TextXAlignment = Enum.TextXAlignment.Left
-	logTitle.Parent = logCard
+	local pushAllButton = createButton(
+		rowFrame,
+		"↑ Push All",
+		PUSH_ORANGE,
+		UDim2.new(),
+		UDim2.new(1/3, -6, 1, 0)
+	)
+	local pullAllButton = createButton(
+		rowFrame,
+		"↓ Pull All",
+		PULL_PURPLE,
+		UDim2.new(),
+		UDim2.new(1/3, -5, 1, 0)
+	)
+	local statusButton = createButton(
+		rowFrame,
+		"≡ Status",
+		STATUS_GRAY,
+		UDim2.new(),
+		UDim2.new(1/3, -5, 1, 0)
+	)
 
-	local legendRow = Instance.new("Frame")
-	legendRow.Size = UDim2.new(1, -24, 0, 24)
-	legendRow.Position = UDim2.new(0, 12, 0, 36)
-	legendRow.BackgroundTransparency = 1
-	legendRow.Parent = logCard
+	local logFeed = Instance.new("Frame")
+	logFeed.Size = UDim2.new(1, -24, 1, -140)
+	logFeed.Position = UDim2.new(0, 12, 0, 140)
+	logFeed.BackgroundColor3 = PANEL_COLOR
+	logFeed.BorderSizePixel = 0
+	logFeed.Parent = root
+	applyCorner(logFeed)
 
-	local legendLayout = Instance.new("UIListLayout")
-	legendLayout.FillDirection = Enum.FillDirection.Horizontal
-	legendLayout.Padding = UDim.new(0, 8)
-	legendLayout.Parent = legendRow
-
-	createLegendChip(legendRow, "+ Add", EVENT_COLOR.add)
-	createLegendChip(legendRow, "~ Update", EVENT_COLOR.update)
-	createLegendChip(legendRow, "- Remove", EVENT_COLOR.remove)
-
-	local logFeed = createInset(logCard, 278)
-	logFeed.Position = UDim2.new(0, 12, 0, 70)
+	local logStroke = Instance.new("UIStroke")
+	logStroke.Color = PANEL_BORDER
+	logStroke.Thickness = 1
+	logStroke.Transparency = 0.15
+	logStroke.Parent = logFeed
 
 	local logScrollFrame = Instance.new("ScrollingFrame")
 	logScrollFrame.Size = UDim2.new(1, 0, 1, 0)
@@ -415,7 +257,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	logScrollFrame.BorderSizePixel = 0
 	logScrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 	logScrollFrame.CanvasSize = UDim2.new(1, 0, 0, 0)
-	logScrollFrame.ScrollBarThickness = 6
+	logScrollFrame.ScrollBarThickness = 4
 	logScrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 116, 139)
 	logScrollFrame.Parent = logFeed
 
@@ -443,6 +285,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	local pollingThread = nil
 	local connectSocket
 	local pushServices
+	local statusMode = "disconnected"
 
 	local function daemonIndexedInstanceCount(statusResponse)
 		if type(statusResponse) ~= "table" then
@@ -481,11 +324,6 @@ __modules['main.client'] = function(moduleRequire, script)
 		return "Disk"
 	end
 
-	local function shouldAutoScrollLog()
-		local maxPosition = math.max(0, logScrollFrame.AbsoluteCanvasSize.Y - logScrollFrame.AbsoluteWindowSize.Y)
-		return maxPosition <= 0 or logScrollFrame.CanvasPosition.Y >= (maxPosition - 28)
-	end
-
 	local function scrollLogToBottom()
 		task.defer(function()
 			local maxPosition = math.max(0, logScrollFrame.AbsoluteCanvasSize.Y - logScrollFrame.AbsoluteWindowSize.Y)
@@ -494,8 +332,6 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 
 	local function appendLogEntry(richText, plainText, level)
-		local stayPinned = shouldAutoScrollLog()
-
 		local entry = Instance.new("TextLabel")
 		entry.Size = UDim2.new(1, -2, 0, 0)
 		entry.AutomaticSize = Enum.AutomaticSize.Y
@@ -511,54 +347,87 @@ __modules['main.client'] = function(moduleRequire, script)
 		entry.Parent = logScrollFrame
 
 		writeOutput(plainText, level)
-
-		if stayPinned then
-			scrollLogToBottom()
-		end
+		scrollLogToBottom()
 	end
 
 	local function appendInfo(message, level)
-		local timestamp = os.date("%H:%M:%S")
 		local isError = level == "warn" or level == "error"
 		local prefix = isError and EVENT_PREFIX.error or EVENT_PREFIX.info
 		local prefixColor = isError and EVENT_COLOR.error or EVENT_COLOR.info
 		local messageColor = isError and EVENT_COLOR.error or EVENT_COLOR.path
 		local richText = string.format(
-			'<font color="%s"><b>%s</b></font> <font color="%s">[%s]</font> <font color="%s">%s</font>',
+			'<font color="%s"><b>%s</b></font> <font color="%s">%s</font>',
 			prefixColor,
 			escapeRichText(prefix),
-			EVENT_COLOR.time,
-			escapeRichText(timestamp),
 			messageColor,
 			escapeRichText(message)
 		)
-		local plainText = string.format("[%s] %s", timestamp, tostring(message))
+		local plainText = string.format("%s %s", prefix, tostring(message))
 		appendLogEntry(richText, plainText, level)
 	end
 
 	local function appendEvent(origin, action, pathValue, extraPath)
-		local timestamp = os.date("%H:%M:%S")
 		local eventType = EVENT_PREFIX[action] and action or "update"
 		local source = originLabel(origin)
 		local actionText = EVENT_PREFIX[eventType]
 		local actionColor = EVENT_COLOR[eventType] or EVENT_COLOR.update
 		local fullPath = extraPath and (tostring(pathValue) .. " -> " .. tostring(extraPath)) or tostring(pathValue)
 		local richText = string.format(
-			'<font color="%s">[%s]</font> <font color="%s">[%s]</font> <font color="%s"><b>%s</b></font> <font color="%s">%s</font>',
-			EVENT_COLOR.time,
-			escapeRichText(timestamp),
-			EVENT_COLOR.source,
-			escapeRichText(source),
+			'<font color="%s"><b>%s</b></font> <font color="%s">[%s]</font> <font color="%s">%s</font>',
 			actionColor,
 			escapeRichText(actionText),
+			EVENT_COLOR.source,
+			escapeRichText(source),
 			EVENT_COLOR.path,
 			escapeRichText(fullPath)
 		)
-		local plainText = string.format("[%s] [%s] %s %s", timestamp, source, actionText, fullPath)
+		local plainText = string.format("%s [%s] %s", actionText, source, fullPath)
 		appendLogEntry(richText, plainText)
 	end
 
 	local appendLog = appendInfo
+
+	local function refreshConnectToggle()
+		if desiredConnection then
+			connectToggleButton.BackgroundColor3 = DISCONNECT_RED
+			connectToggleButton.Text = "⏹ Disconnect"
+			return
+		end
+
+		connectToggleButton.BackgroundColor3 = CONNECT_BLUE
+		connectToggleButton.Text = "▶ Connect"
+	end
+
+	local function setStatus(mode)
+		statusMode = mode
+
+		if mode == "connected" then
+			statusPill.BackgroundColor3 = STATUS_CONNECTED
+			statusLabel.Text = "🟢 Connected"
+			return
+		end
+
+		if mode == "conflict" then
+			statusPill.BackgroundColor3 = STATUS_CONFLICT
+			statusLabel.Text = "🟡 Conflict"
+			return
+		end
+
+		statusPill.BackgroundColor3 = STATUS_DISCONNECTED
+		statusLabel.Text = "🔴 Disconnected"
+	end
+
+	task.spawn(function()
+		while widget.Parent ~= nil do
+			setStatus(statusMode)
+			refreshConnectToggle()
+			task.wait(2)
+		end
+	end)
+
+	local function appendSyncBlocked()
+		appendInfo("Sync blocked — stop playtest first", "warn")
+	end
 
 	local function isSyncAllowed(actionLabel)
 		if Listener.isSyncAllowed() then
@@ -600,13 +469,8 @@ __modules['main.client'] = function(moduleRequire, script)
 		return serialized
 	end
 
-	local function setStatus(text, color)
-		statusLabel.Text = text
-		statusPill.BackgroundColor3 = color
-	end
-
 	local function currentServerUrl()
-		return string.gsub(serverUrlBox.Text, "/+$", "")
+		return DEFAULT_SERVER_URL
 	end
 
 	local function appendConnectionHint()
@@ -625,18 +489,6 @@ __modules['main.client'] = function(moduleRequire, script)
 			task.cancel(reconnectThread)
 			reconnectThread = nil
 		end
-	end
-
-	local function refreshSelection()
-		local selected = Selection:Get()
-		if #selected == 0 then
-			selectionLabel.Text = "Selection: none"
-			return nil
-		end
-
-		local instance = selected[1]
-		selectionLabel.Text = string.format("Selection: %s\nPath: %s", instance.Name, PathUtil.getInstancePath(instance))
-		return instance
 	end
 
 	local function instanceExistsAtPath(pathValue)
@@ -858,7 +710,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 
 		if payload.type == "CONFLICT" then
-			setStatus("Conflict", STATUS_WARN)
+			setStatus("conflict")
 			appendInfo("Conflict: " .. tostring(payload.reason or payload.path), "warn")
 			return
 		end
@@ -892,7 +744,7 @@ __modules['main.client'] = function(moduleRequire, script)
 					socketClient = nil
 				end
 				if desiredConnection then
-					setStatus("Polling", STATUS_WARN)
+					setStatus("disconnected")
 					appendLog(
 						wasConnected and "WebSocket closed. Falling back to HTTP polling."
 							or "WebSocket closed before the daemon handshake completed. Falling back to HTTP polling.",
@@ -903,7 +755,7 @@ __modules['main.client'] = function(moduleRequire, script)
 					return
 				end
 				stopPolling()
-				setStatus("Disconnected", STATUS_OFFLINE)
+				setStatus("disconnected")
 				appendLog("WebSocket closed.")
 			end,
 		})
@@ -913,7 +765,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			socketClient = nil
 			appendLog("WebSocket connect failed: " .. tostring(errorMessage), "warn")
 			appendConnectionHint()
-			setStatus("Polling", STATUS_WARN)
+			setStatus("disconnected")
 			startPolling(isReconnect and "reconnect-fallback" or "initial-fallback")
 			scheduleReconnect()
 			return false
@@ -930,7 +782,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			appendLog("Connected transport, but HELLO could not be sent.", "warn")
 		end
 
-		setStatus("Connected", STATUS_ONLINE)
+		setStatus("connected")
 		appendLog("Connected to RoSync daemon at " .. currentServerUrl() .. ".")
 		return true
 	end
@@ -977,7 +829,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 
 	local function startWatch()
-		if not isSyncAllowed("Start Watch") then
+		if not isSyncAllowed("Watch") then
 			return
 		end
 
@@ -1031,18 +883,39 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	end
 
-	buttons.Connect.MouseButton1Click:Connect(function()
+	local function disconnectFromDaemon()
+		desiredConnection = false
+		refreshConnectToggle()
+		cancelReconnect()
+		stopPolling()
+		stopWatch()
+		if socketClient then
+			socketClient:close()
+			socketClient = nil
+		end
+		setStatus("disconnected")
+		appendLog("Disconnected from RoSync.")
+	end
+
+	connectToggleButton.MouseButton1Click:Connect(function()
+		if desiredConnection then
+			disconnectFromDaemon()
+			return
+		end
+
 		httpClient:setBaseUrl(currentServerUrl())
 		desiredConnection = true
+		refreshConnectToggle()
+		startWatch()
+
 		local success, response = httpClient:getHealth()
 		if success then
-			setStatus("Connecting...", STATUS_WARN)
 			appendLog(
 				"HTTP health OK for " .. currentServerUrl() .. " (project " .. tostring(response.project or "unknown") .. "). Opening WebSocket..."
 			)
 			connectSocket(false)
 		else
-			setStatus("Polling", STATUS_WARN)
+			setStatus("disconnected")
 			appendLog("HTTP health failed: " .. tostring(response), "warn")
 			appendConnectionHint()
 			startPolling("health-check")
@@ -1050,14 +923,18 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	end)
 
-	buttons["Start Watch"].MouseButton1Click:Connect(startWatch)
+	pushAllButton.MouseButton1Click:Connect(function()
+		if not Listener.isSyncAllowed() then
+			appendSyncBlocked()
+			return
+		end
 
-	buttons["Push All"].MouseButton1Click:Connect(function()
 		pushServices()
 	end)
 
-	buttons["Pull All"].MouseButton1Click:Connect(function()
-		if not isSyncAllowed("Pull All") then
+	pullAllButton.MouseButton1Click:Connect(function()
+		if not Listener.isSyncAllowed() then
+			appendSyncBlocked()
 			return
 		end
 
@@ -1066,65 +943,34 @@ __modules['main.client'] = function(moduleRequire, script)
 		})
 	end)
 
-	buttons["Push Selection"].MouseButton1Click:Connect(function()
-		if not isSyncAllowed("Push Selection") then
-			return
-		end
-
-		local selected = refreshSelection()
-		if selected then
-			pushInstance(selected, "update", true)
-		end
-	end)
-
-	buttons.Status.MouseButton1Click:Connect(function()
+	statusButton.MouseButton1Click:Connect(function()
 		httpClient:setBaseUrl(currentServerUrl())
-		local success, response = httpClient:getHealth()
+		local success, response = httpClient:request("GET", "/status")
 		if success then
 			local connections = response.connections or {}
+			local summary = response.summary or {}
 			appendLog(
 				"Status: project="
-					.. tostring(response.project or "unknown")
+					.. tostring(response.project or response.config and response.config.projectName or "unknown")
 					.. ", studio="
 					.. tostring(connections.studio or 0)
 					.. ", editor="
 					.. tostring(connections.editor or 0)
-					.. ", host="
-					.. tostring(response.host or "?")
-					.. ", port="
-					.. tostring(response.port or "?")
+					.. ", instances="
+					.. tostring(summary.indexedInstances or 0)
 			)
 		else
 			appendLog("Status failed: " .. tostring(response), "warn")
 		end
 	end)
 
-	buttons.Refresh.MouseButton1Click:Connect(function()
-		refreshSelection()
-		fetchAndApplyTree("manual-refresh")
-	end)
-
-	buttons.Disconnect.MouseButton1Click:Connect(function()
-		desiredConnection = false
-		cancelReconnect()
-		stopPolling()
-		stopWatch()
-		if socketClient then
-			socketClient:close()
-			socketClient = nil
-		end
-		setStatus("Disconnected", STATUS_OFFLINE)
-		appendLog("Disconnected from RoSync.")
-	end)
-
-	Selection.SelectionChanged:Connect(refreshSelection)
-
 	button.Click:Connect(function()
 		widget.Enabled = not widget.Enabled
 	end)
 
-	refreshSelection()
-	appendLog("RoSync plugin ready. The live activity feed below is scrollable, and Studio Output still mirrors these entries.")
+	refreshConnectToggle()
+	setStatus("disconnected")
+	appendLog("RoSync plugin ready.")
 
 end
 
