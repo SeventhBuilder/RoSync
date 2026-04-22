@@ -25,6 +25,10 @@ $installPathFile = Join-Path $metaDir "install-path"
 $installMetadataPath = Join-Path $metaDir "install.json"
 $daemonEntry = Join-Path $repoRoot "daemon\dist\main.js"
 $extensionId = "rosync.rosync-extension"
+$extensionSourceDir = Join-Path $repoRoot "extension"
+$extensionManifestPath = Join-Path $extensionSourceDir "package.json"
+$extensionEntry = Join-Path $extensionSourceDir "dist\extension.js"
+$script:extensionInstallPaths = @()
 $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 function Write-Step {
@@ -158,13 +162,61 @@ function Write-InstallMetadata {
   [System.IO.File]::WriteAllText($installMetadataPath, $metadataJson, $utf8NoBom)
 }
 
+function Get-ExtensionManifest {
+  if (-not (Test-Path -LiteralPath $extensionManifestPath)) {
+    throw "Extension manifest was not found at $extensionManifestPath."
+  }
+
+  try {
+    $manifestJson = (Get-Content -LiteralPath $extensionManifestPath -Raw) -replace "^\uFEFF", ""
+    $manifest = $manifestJson | ConvertFrom-Json
+  } catch {
+    throw "Unable to parse the extension manifest at $extensionManifestPath."
+  }
+
+  if (-not $manifest.publisher -or -not $manifest.name -or -not $manifest.version) {
+    throw "Extension manifest is missing publisher, name, or version."
+  }
+
+  return $manifest
+}
+
+function Get-ExtensionInstallRoots {
+  $roots = [System.Collections.Generic.List[string]]::new()
+  $roots.Add((Join-Path $HOME ".vscode\extensions"))
+
+  $cursorProfileDir = Join-Path $HOME ".cursor"
+  if (Test-Path -LiteralPath $cursorProfileDir) {
+    $roots.Add((Join-Path $cursorProfileDir "extensions"))
+  }
+
+  return $roots
+}
+
 function Install-EditorExtension {
   if ($SkipEditorExtension -or $SkipVsCodeExtension) {
     return
   }
 
-  if (Get-Command code -ErrorAction SilentlyContinue) {
-    Write-Host "Editor extension packaging is not automated in the source installer yet. The current first-party editor extension target is VS Code."
+  if (-not (Test-Path -LiteralPath $extensionEntry)) {
+    throw "Built extension entrypoint was not found at $extensionEntry. Run the build step first."
+  }
+
+  $manifest = Get-ExtensionManifest
+  $resolvedExtensionId = "$($manifest.publisher).$($manifest.name)"
+  $targetFolderName = "$resolvedExtensionId-$($manifest.version)"
+  $script:extensionInstallPaths = @()
+
+  Write-Step "Installing editor extension"
+  foreach ($root in Get-ExtensionInstallRoots) {
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+    Get-ChildItem -LiteralPath $root -Directory -Filter "$resolvedExtensionId-*" -ErrorAction SilentlyContinue |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    $destination = Join-Path $root $targetFolderName
+    Copy-Item -LiteralPath $extensionSourceDir -Destination $destination -Recurse -Force
+    $script:extensionInstallPaths += $destination
   }
 }
 
@@ -210,6 +262,9 @@ Write-Host "  Plugin: $pluginInstallPath"
 if (-not $PluginOnly) {
   Write-Host "  CLI shim: $shimCmdPath"
   Write-Host "  Metadata: $installMetadataPath"
+  foreach ($installedExtensionPath in $script:extensionInstallPaths) {
+    Write-Host "  Editor extension: $installedExtensionPath"
+  }
 }
 
 Write-Host ""

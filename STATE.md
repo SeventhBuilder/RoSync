@@ -8,6 +8,7 @@
 - Studio plugin transport foundation: HTTP health checks, WebSocket connect/reconnect, polling fallback, push/pull commands, and a scrollable sync activity feed exist in the Studio plugin source and bundled plugin artifact.
 - VS Code live client foundation: the extension connects over WebSocket, shows Explorer and Sync Status sidebars, updates incrementally from daemon events, and tracks connection state in the status bar.
 - Installer/update metadata foundation: Windows, Mac, and Linux source installers plus uninstall/update metadata flows exist in the repo.
+- Source installers now install the unpacked RoSync VS Code extension into the local extensions directory and refresh that install on rerun; if a local Cursor profile exists, the installer also copies the same unpacked extension there.
 - `rosync init` now scaffolds `TextChatService/` by default alongside the standard service folders in `src/`.
 - Plugin source cleanup: unused plugin UI stubs were removed from `plugin/src/ui/`, the unused `plugin/src/util/SchemaUtil.luau` module was deleted, and the bundled plugin was rebuilt without dead modules.
 - Repo cleanup: `AUDIT.md` has been retired in favor of `STATE.md` as the living implementation-status document, and `examples/dev-project/.rosync/runtime.json` is no longer tracked because it is machine-local runtime state.

@@ -110,6 +110,11 @@ remove_shell_profile_path "$HOME/.bashrc"
 remove_shell_profile_path "$HOME/.zshrc"
 
 echo "==> Removing editor extension (best effort)"
+for EXTENSION_ROOT in "$HOME/.vscode/extensions" "$HOME/.cursor/extensions"; do
+  if [ -d "$EXTENSION_ROOT" ]; then
+    find "$EXTENSION_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$EXTENSION_ID-*" -exec rm -rf {} +
+  fi
+done
 if command -v code >/dev/null 2>&1; then
   code --uninstall-extension "$EXTENSION_ID" >/dev/null 2>&1 || true
 fi

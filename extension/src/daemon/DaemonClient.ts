@@ -26,6 +26,11 @@ export interface ProjectTreeSnapshot {
   services: ProjectTreeNode[];
 }
 
+export interface SchemaClassDescriptor {
+  name: string;
+  properties: string[];
+}
+
 export interface DaemonConflict {
   id: string;
   path: string;
@@ -83,6 +88,18 @@ interface NodeResponse {
 }
 
 interface HealthResponse extends DaemonHealth {}
+
+interface SchemaResponse {
+  ok: boolean;
+  metadata: {
+    source: string;
+    fetchedAt: string;
+    version: string | null;
+  };
+  classCount: number;
+  className: string | null;
+  classDescriptor: SchemaClassDescriptor | null;
+}
 
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
 export type DaemonOrigin = "studio" | "editor" | "disk";
@@ -170,6 +187,12 @@ export class DaemonClient implements vscode.Disposable {
     return response.node;
   }
 
+  public async schema(className: string): Promise<SchemaClassDescriptor | null> {
+    const endpoint = await this.getEndpoint();
+    const response = await requestJson<SchemaResponse>(endpoint, `/schema?class=${encodeURIComponent(className)}`);
+    return response.classDescriptor;
+  }
+
   public async createNode(parentPath: string, name: string, className: string): Promise<ProjectTreeNode> {
     const endpoint = await this.getEndpoint();
     const response = await requestJson<NodeResponse>(endpoint, "/api/node", {
@@ -200,6 +223,21 @@ export class DaemonClient implements vscode.Disposable {
     await requestJson<{ ok: boolean }>(endpoint, `/api/node?path=${encodeURIComponent(nodePath)}`, {
       method: "DELETE",
     });
+  }
+
+  public async patchNode(
+    nodePath: string,
+    patch: Partial<Pick<ProjectTreeNode, "properties" | "attributes" | "tags" | "source">>,
+  ): Promise<ProjectTreeNode> {
+    const endpoint = await this.getEndpoint();
+    const response = await requestJson<NodeResponse>(endpoint, "/api/node", {
+      method: "PATCH",
+      body: JSON.stringify({
+        path: nodePath,
+        ...patch,
+      }),
+    });
+    return response.node;
   }
 
   public reportEditorActivity(activity: {

@@ -152,7 +152,7 @@ function statusBarTextForState(state: ConnectionState): string {
 export function activate(context: vscode.ExtensionContext): void {
   const daemonClient = new DaemonClient();
   const explorerProvider = new ExplorerProvider(daemonClient);
-  const propertiesProvider = new PropertiesProvider();
+  const propertiesProvider = new PropertiesProvider(daemonClient);
   const statusProvider = new StatusProvider(daemonClient);
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.text = statusBarTextForState("connecting");
@@ -167,9 +167,14 @@ export function activate(context: vscode.ExtensionContext): void {
     daemonClient,
     explorerProvider,
     statusProvider,
+    propertiesProvider,
     statusBarItem,
     explorerTreeView,
-    vscode.window.registerTreeDataProvider("rosync.properties", propertiesProvider),
+    vscode.window.registerWebviewViewProvider("rosync.properties", propertiesProvider, {
+      webviewOptions: {
+        retainContextWhenHidden: true,
+      },
+    }),
     vscode.window.registerTreeDataProvider("rosync.status", statusProvider),
     vscode.commands.registerCommand("rosync.refreshExplorer", async () => {
       await explorerProvider.refresh();

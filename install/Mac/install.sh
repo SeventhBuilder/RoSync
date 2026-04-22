@@ -56,6 +56,10 @@ DAEMON_ENTRY="$REPO_ROOT/daemon/dist/main.js"
 INSTALL_SCRIPT="$REPO_ROOT/install/Mac/install.sh"
 UNINSTALL_SCRIPT="$REPO_ROOT/install/Mac/uninstall.sh"
 EXTENSION_ID="rosync.rosync-extension"
+EXTENSION_SOURCE_DIR="$REPO_ROOT/extension"
+EXTENSION_MANIFEST="$EXTENSION_SOURCE_DIR/package.json"
+EXTENSION_ENTRY="$EXTENSION_SOURCE_DIR/dist/extension.js"
+EXTENSION_INSTALL_PATHS=""
 
 write_step() {
   echo "==> $1"
@@ -135,13 +139,57 @@ fs.writeFileSync(metadataPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 EOF
 }
 
+append_extension_install_path() {
+  if [ -z "$EXTENSION_INSTALL_PATHS" ]; then
+    EXTENSION_INSTALL_PATHS="$1"
+  else
+    EXTENSION_INSTALL_PATHS="$EXTENSION_INSTALL_PATHS
+$1"
+  fi
+}
+
+install_extension_root() {
+  EXTENSION_ROOT="$1"
+  mkdir -p "$EXTENSION_ROOT"
+  find "$EXTENSION_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$RESOLVED_EXTENSION_ID-*" -exec rm -rf {} +
+  DESTINATION="$EXTENSION_ROOT/$TARGET_FOLDER_NAME"
+  rm -rf "$DESTINATION"
+  cp -R "$EXTENSION_SOURCE_DIR" "$DESTINATION"
+  append_extension_install_path "$DESTINATION"
+}
+
 install_editor_extension() {
   if [ "$SKIP_EDITOR_EXTENSION" -eq 1 ] || [ "$SKIP_VSCODE_EXTENSION" -eq 1 ]; then
     return
   fi
 
-  if command -v code >/dev/null 2>&1; then
-    echo "Editor extension packaging is not automated in the source installer yet. The current first-party editor extension target is VS Code."
+  if [ ! -f "$EXTENSION_ENTRY" ]; then
+    echo "Built extension entrypoint was not found at $EXTENSION_ENTRY. Run the build step first." >&2
+    exit 1
+  fi
+
+  if [ ! -f "$EXTENSION_MANIFEST" ]; then
+    echo "Extension manifest was not found at $EXTENSION_MANIFEST." >&2
+    exit 1
+  fi
+
+  EXTENSION_PUBLISHER=$(node -e 'const fs = require("node:fs"); const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(typeof manifest.publisher === "string" ? manifest.publisher : "");' "$EXTENSION_MANIFEST")
+  EXTENSION_NAME=$(node -e 'const fs = require("node:fs"); const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(typeof manifest.name === "string" ? manifest.name : "");' "$EXTENSION_MANIFEST")
+  EXTENSION_VERSION=$(node -e 'const fs = require("node:fs"); const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(typeof manifest.version === "string" ? manifest.version : "");' "$EXTENSION_MANIFEST")
+
+  if [ -z "$EXTENSION_PUBLISHER" ] || [ -z "$EXTENSION_NAME" ] || [ -z "$EXTENSION_VERSION" ]; then
+    echo "Extension manifest is missing publisher, name, or version." >&2
+    exit 1
+  fi
+
+  RESOLVED_EXTENSION_ID="$EXTENSION_PUBLISHER.$EXTENSION_NAME"
+  TARGET_FOLDER_NAME="$RESOLVED_EXTENSION_ID-$EXTENSION_VERSION"
+  EXTENSION_INSTALL_PATHS=""
+
+  write_step "Installing editor extension"
+  install_extension_root "$HOME/.vscode/extensions"
+  if [ -d "$HOME/.cursor" ]; then
+    install_extension_root "$HOME/.cursor/extensions"
   fi
 }
 
@@ -219,6 +267,11 @@ echo "  Plugin: $PLUGIN_INSTALL_PATH"
 if [ "$PLUGIN_ONLY" -eq 0 ]; then
   echo "  CLI shim: $SHIM_PATH"
   echo "  Metadata: $INSTALL_METADATA_FILE"
+  if [ -n "$EXTENSION_INSTALL_PATHS" ]; then
+    printf '%s\n' "$EXTENSION_INSTALL_PATHS" | while IFS= read -r EXTENSION_PATH; do
+      [ -n "$EXTENSION_PATH" ] && echo "  Editor extension: $EXTENSION_PATH"
+    done
+  fi
 fi
 
 echo

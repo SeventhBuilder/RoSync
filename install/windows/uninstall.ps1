@@ -18,6 +18,18 @@ $installPathFile = Join-Path $metaDir "install-path"
 $installMetadataPath = Join-Path $metaDir "install.json"
 $extensionId = "rosync.rosync-extension"
 
+function Get-ExtensionInstallRoots {
+  $roots = [System.Collections.Generic.List[string]]::new()
+  $roots.Add((Join-Path $HOME ".vscode\extensions"))
+
+  $cursorProfileDir = Join-Path $HOME ".cursor"
+  if (Test-Path -LiteralPath $cursorProfileDir) {
+    $roots.Add((Join-Path $cursorProfileDir "extensions"))
+  }
+
+  return $roots
+}
+
 function Write-Step {
   param([string]$Message)
   Write-Host "==> $Message"
@@ -65,13 +77,20 @@ function Stop-RoSyncDaemon {
 }
 
 function Uninstall-EditorExtension {
-  if (-not (Get-Command code -ErrorAction SilentlyContinue)) {
-    return
+  foreach ($root in Get-ExtensionInstallRoots) {
+    if (-not (Test-Path -LiteralPath $root)) {
+      continue
+    }
+
+    Get-ChildItem -LiteralPath $root -Directory -Filter "$extensionId-*" -ErrorAction SilentlyContinue |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   }
 
-  try {
-    & code --uninstall-extension $extensionId | Out-Null
-  } catch {
+  if (Get-Command code -ErrorAction SilentlyContinue) {
+    try {
+      & code --uninstall-extension $extensionId | Out-Null
+    } catch {
+    }
   }
 }
 

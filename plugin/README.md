@@ -25,6 +25,7 @@ That will:
 - bundle `plugin/RoSync.plugin.luau`
 - copy the plugin into `%LOCALAPPDATA%\Roblox\Plugins\RoSync.plugin.lua`
 - create a local CLI shim at `%LOCALAPPDATA%\RoSync\bin\rosync.cmd`
+- install the unpacked RoSync VS Code extension into your local extensions directory
 
 For Unix shells, the install scripts can be run from either `bash` or `zsh`:
 
@@ -34,6 +35,8 @@ zsh install/linux/install.sh
 bash install/Mac/install.sh
 zsh install/Mac/install.sh
 ```
+
+After install, reload or restart VS Code / Cursor so the unpacked extension is picked up.
 
 ## Build A Testable Plugin File
 

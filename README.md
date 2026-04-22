@@ -50,7 +50,9 @@ cd RoSync
 bash install/linux/install.sh
 ```
 
-The installer builds RoSync from source, adds `rosync` to your PATH, and installs the VSCode extension automatically.
+The source installer builds RoSync, adds `rosync` to your PATH, copies the Roblox Studio plugin into the local plugins folder, and installs the unpacked RoSync VS Code extension into your local extensions directory. If a local Cursor profile already exists, the same unpacked extension is copied there too.
+
+After install, reload or restart VS Code / Cursor so the newly copied extension is picked up.
 
 ---
 
