@@ -10,7 +10,7 @@
 - Installer/update metadata foundation: Windows, macOS, and Linux source installers plus uninstall/update metadata flows exist in the repo and were carried through the audit as implemented foundations.
 
 ## 🔴 Known Broken
-- First Connect wipes Studio instances: the initial connect/apply flow can overwrite or destroy live Studio state on first handshake; highest-priority bug, owned by `plugin/src/main.client.luau` and `plugin/src/sync/Deserializer.luau`.
+- First Connect wipes Studio instances: the non-destructive connect fix is now committed and pushed in `plugin/src/main.client.luau` and `plugin/src/sync/Deserializer.luau`, but manual Studio verification is still pending before this can move to ✅ working.
 - System services still sync to `src/`: blocked/internal Roblox services like `CoreGui` and `GuiService` are still making it into disk sync paths instead of being hard-blocked, owned by `plugin/src/main.client.luau`, `plugin/src/sync/Listener.luau`, and daemon tree ingestion rules.
 - Runtime `Players` children still sync: live player instances under `Players` are being serialized even though they are runtime-only and should be blocked, owned by `plugin/src/sync/Listener.luau` and plugin-side filtering.
 - `_RoSyncManaged` attribute is written into Studio instances: RoSync is tagging live instances during apply instead of staying invisible, owned by `plugin/src/sync/Deserializer.luau`.
@@ -38,4 +38,4 @@
 - Fresh-machine gate verification for Phases 8–10: medium priority — installers and update/uninstall need a full clean-environment proof pass.
 
 ## 📋 Current Focus
-Create and push `STATE.md` as the repo’s required session state file, then immediately fix the highest-priority destructive bug: first connect wiping Studio instances.
+Run manual Studio verification for the published first-connect wipe fix, then continue down the broken list with blocked-service filtering and runtime `Players` exclusions.
