@@ -18,7 +18,7 @@ interface BackupEntry {
 
 interface CommandResolution {
   executable: string;
-  shell: boolean;
+  argsPrefix?: string[];
 }
 
 function executableName(command: string): string {
@@ -55,41 +55,47 @@ function getWindowsNpmFallbacks(): string[] {
     (value): value is string => typeof value === "string" && value.length > 0,
   );
 
-  fallbacks.add(path.join(executableDirectory, "npm.cmd"));
+  if (typeof env.npm_execpath === "string" && env.npm_execpath.length > 0) {
+    fallbacks.add(env.npm_execpath);
+  }
+
+  fallbacks.add(path.join(executableDirectory, "node_modules", "npm", "bin", "npm-cli.js"));
 
   for (const root of candidateRoots) {
-    fallbacks.add(path.join(root, "nodejs", "npm.cmd"));
-    fallbacks.add(path.join(root, "Programs", "nodejs", "npm.cmd"));
-    fallbacks.add(path.join(root, "npm", "npm.cmd"));
+    fallbacks.add(path.join(root, "nodejs", "node_modules", "npm", "bin", "npm-cli.js"));
+    fallbacks.add(path.join(root, "Programs", "nodejs", "node_modules", "npm", "bin", "npm-cli.js"));
   }
 
   return [...fallbacks];
 }
 
 async function resolveCommand(command: string): Promise<CommandResolution> {
-  const shell = process.platform === "win32";
   const executable = executableName(command);
 
   if (process.platform !== "win32" || command !== "npm") {
-    return { executable, shell };
+    return { executable };
   }
 
   for (const candidate of getWindowsNpmFallbacks()) {
     if (await pathExists(candidate)) {
-      return { executable: candidate, shell };
+      return {
+        executable: process.execPath,
+        argsPrefix: [candidate],
+      };
     }
   }
 
-  return { executable, shell };
+  return { executable };
 }
 
 async function runCommand(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
     void (async () => {
       const resolution = await resolveCommand(command);
-      const child = spawn(resolution.executable, args, {
+      const finalArgs = [...(resolution.argsPrefix ?? []), ...args];
+      const child = spawn(resolution.executable, finalArgs, {
         cwd,
-        shell: resolution.shell,
+        shell: false,
         stdio: "inherit",
       });
 
@@ -109,9 +115,10 @@ async function runCommandCapture(command: string, args: string[], cwd: string): 
   return new Promise((resolve, reject) => {
     void (async () => {
       const resolution = await resolveCommand(command);
-      const child = spawn(resolution.executable, args, {
+      const finalArgs = [...(resolution.argsPrefix ?? []), ...args];
+      const child = spawn(resolution.executable, finalArgs, {
         cwd,
-        shell: resolution.shell,
+        shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
 
