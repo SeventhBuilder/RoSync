@@ -509,7 +509,7 @@ local function sendMessage(payload)
 	return success
 end
 
-local function fetchAndApplyTree(reason)
+local function fetchAndApplyTree(reason, options)
 	if refreshInFlight then
 		refreshQueued = true
 		return
@@ -525,11 +525,23 @@ local function fetchAndApplyTree(reason)
 		return
 	end
 
+	local applyOptions = nil
+	if type(options) == "table" and options.logProgress then
+		applyOptions = {
+			batchSize = 50,
+			onProgress = function(done, total)
+				appendInfo(string.format("Applied %d/%d instances", done, total))
+			end,
+		}
+	end
+
 	applyInProgress = true
-	local applied, applyError = Deserializer.applyTree(response.tree)
+	local applied, applyError, appliedCount = Deserializer.applyTree(response.tree, applyOptions)
 	applyInProgress = false
 
-	if applied and reason ~= "poll" then
+	if applied and type(options) == "table" and options.logProgress then
+		appendInfo(string.format("Pull All complete - %d instances applied", appliedCount or 0))
+	elseif applied and reason ~= "poll" then
 		appendLog("Applied daemon tree (" .. tostring(reason) .. ").")
 	elseif not applied then
 		appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError), "warn")
@@ -986,8 +998,9 @@ pullAllButton.MouseButton1Click:Connect(function()
 		return
 	end
 
-	sendMessage({
-		type = "PULL_REQUEST",
+	appendInfo("Starting Pull All...")
+	fetchAndApplyTree("pull-all", {
+		logProgress = true,
 	})
 end)
 

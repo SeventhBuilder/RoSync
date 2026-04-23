@@ -6,6 +6,21 @@ local Deserializer = {}
 local READ_ONLY_INSTANCES = {
 	["Workspace/Camera"] = true,
 }
+local LOCKED_SERVICES = {
+	Workspace = true,
+	Players = true,
+	Lighting = true,
+	ReplicatedFirst = true,
+	ReplicatedStorage = true,
+	ServerScriptService = true,
+	ServerStorage = true,
+	StarterGui = true,
+	StarterPack = true,
+	StarterPlayer = true,
+	Teams = true,
+	SoundService = true,
+	TextChatService = true,
+}
 local SCRIPT_CLASS_NAMES = {
 	Script = true,
 	LocalScript = true,
@@ -258,43 +273,23 @@ local function decodeValue(rawValue)
 	return encodedValue
 end
 
-local function applyAttributesExact(instance, attributes)
-	local desired = {}
+local function applyAttributesAdditive(instance, attributes)
 	for key, value in pairs(attributes or {}) do
-		desired[key] = true
 		local decoded = decodeValue(value)
 		pcall(function()
 			instance:SetAttribute(key, decoded)
 		end)
 	end
-
-	for key in pairs(instance:GetAttributes()) do
-		if string.sub(key, 1, 7) == "_RoSync" or not desired[key] then
-			pcall(function()
-				instance:SetAttribute(key, nil)
-			end)
-		end
-	end
 end
 
-local function applyTagsExact(instance, tags)
-	local desired = {}
+local function applyTagsAdditive(instance, tags)
 	for _, tag in ipairs(tags or {}) do
 		if type(tag) == "string" then
-			desired[tag] = true
 			if not CollectionService:HasTag(instance, tag) then
 				pcall(function()
 					CollectionService:AddTag(instance, tag)
 				end)
 			end
-		end
-	end
-
-	for _, tag in ipairs(CollectionService:GetTags(instance)) do
-		if not desired[tag] then
-			pcall(function()
-				CollectionService:RemoveTag(instance, tag)
-			end)
 		end
 	end
 end
@@ -344,14 +339,7 @@ local function findCandidateChild(parent, node)
 		return nil
 	end
 
-	if existing.ClassName == node.className then
-		return existing
-	end
-
-	pcall(function()
-		existing:Destroy()
-	end)
-	return nil
+	return existing
 end
 
 local function splitPath(pathValue)
@@ -379,6 +367,54 @@ end
 
 local function isReadOnlyPath(pathValue)
 	return READ_ONLY_INSTANCES[pathValue] == true
+end
+
+local function isLockedServiceName(serviceName)
+	return LOCKED_SERVICES[serviceName] == true
+end
+
+local function isLockedServiceInstance(instance)
+	return instance ~= nil and instance.Parent == game and isLockedServiceName(instance.Name)
+end
+
+local function countNodeInstances(node)
+	local total = 1
+	for _, childNode in ipairs(node.children or {}) do
+		total += countNodeInstances(childNode)
+	end
+	return total
+end
+
+local function countTreeInstances(tree)
+	local total = 0
+	for _, serviceNode in ipairs(tree.services or {}) do
+		total += countNodeInstances(serviceNode)
+	end
+	return total
+end
+
+local function createProgressState(options, total)
+	if type(options) ~= "table" or type(options.onProgress) ~= "function" then
+		return nil
+	end
+
+	return {
+		done = 0,
+		total = total,
+		batchSize = type(options.batchSize) == "number" and math.max(1, options.batchSize) or 50,
+		onProgress = options.onProgress,
+	}
+end
+
+local function markProgress(progressState)
+	if progressState == nil then
+		return
+	end
+
+	progressState.done += 1
+	if progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total then
+		progressState.onProgress(progressState.done, progressState.total)
+	end
 end
 
 local function getServiceRoot(serviceName)
@@ -441,10 +477,11 @@ end
 
 local applyNode
 
-local function applyChildrenRecursive(parentInstance, parentPath, childNodes)
+local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState)
 	for _, childNode in ipairs(childNodes or {}) do
 		local childPath = joinPath(parentPath, childNode.name)
 		if isReadOnlyPath(childPath) then
+			markProgress(progressState)
 			continue
 		end
 
@@ -455,21 +492,23 @@ local function applyChildrenRecursive(parentInstance, parentPath, childNodes)
 			childInstance.Parent = parentInstance
 		end
 
-		applyNode(childInstance, childNode, childPath)
+		applyNode(childInstance, childNode, childPath, progressState)
 	end
 end
 
-applyNode = function(instance, node, nodePath)
+applyNode = function(instance, node, nodePath, progressState)
 	if isReadOnlyPath(nodePath) then
+		markProgress(progressState)
 		return true
 	end
 
 	instance.Name = node.name
 
-	applyAttributesExact(instance, node.attributes)
-	applyTagsExact(instance, node.tags)
+	applyAttributesAdditive(instance, node.attributes)
+	applyTagsAdditive(instance, node.tags)
 	local deferredPrimaryPart = applyProperties(instance, node)
-	applyChildrenRecursive(instance, nodePath, node.children)
+	markProgress(progressState)
+	applyChildrenRecursive(instance, nodePath, node.children, progressState)
 
 	if type(deferredPrimaryPart) == "table" then
 		local referenceValue = deferredPrimaryPart.value or deferredPrimaryPart.Value or deferredPrimaryPart
@@ -485,21 +524,22 @@ applyNode = function(instance, node, nodePath)
 	end
 end
 
-local function applyServiceNode(serviceNode)
+local function applyServiceNode(serviceNode, progressState)
 	local service = getServiceRoot(serviceNode.name)
 	if not service then
 		return false, "Missing service " .. tostring(serviceNode.name)
 	end
 
-	applyAttributesExact(service, serviceNode.attributes)
-	applyTagsExact(service, serviceNode.tags)
+	applyAttributesAdditive(service, serviceNode.attributes)
+	applyTagsAdditive(service, serviceNode.tags)
 	applyProperties(service, serviceNode)
-	applyChildrenRecursive(service, serviceNode.name, serviceNode.children)
+	markProgress(progressState)
+	applyChildrenRecursive(service, serviceNode.name, serviceNode.children, progressState)
 
 	return true
 end
 
-function Deserializer.applySyncInstance(pathValue, node)
+function Deserializer.applySyncInstance(pathValue, node, options)
 	if type(pathValue) ~= "string" or type(node) ~= "table" then
 		return false, "Expected path and node."
 	end
@@ -514,6 +554,7 @@ function Deserializer.applySyncInstance(pathValue, node)
 	end
 
 	ChangeHistoryService:SetWaypoint("Before RoSync Sync Instance")
+	local progressState = createProgressState(options, countNodeInstances(node))
 
 	if #segments == 1 then
 		local success, result = applyServiceNode({
@@ -524,9 +565,9 @@ function Deserializer.applySyncInstance(pathValue, node)
 			tags = node.tags or {},
 			source = node.source,
 			children = node.children or {},
-		})
+		}, progressState)
 		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
-		return success, result
+		return success, result, progressState and progressState.done or countNodeInstances(node)
 	end
 
 	local parent, parentError = ensureParentForPath(pathValue)
@@ -551,9 +592,9 @@ function Deserializer.applySyncInstance(pathValue, node)
 		instance.Parent = parent
 	end
 
-	applyNode(instance, childNode, pathValue)
+	applyNode(instance, childNode, pathValue, progressState)
 	ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
-	return true
+	return true, nil, progressState and progressState.done or countNodeInstances(childNode)
 end
 
 function Deserializer.removeAtPath(pathValue)
@@ -568,6 +609,10 @@ function Deserializer.removeAtPath(pathValue)
 
 	if instance == game then
 		return false, "Cannot remove the DataModel root."
+	end
+
+	if isLockedServiceInstance(instance) then
+		return false, "Cannot remove locked service " .. tostring(instance.Name)
 	end
 
 	ChangeHistoryService:SetWaypoint("Before RoSync Remove")
@@ -591,6 +636,10 @@ function Deserializer.renameAtPath(oldPath, newPath)
 	local instance = findInstanceByPath(oldPath)
 	if not instance then
 		return false, "Instance not found at " .. tostring(oldPath)
+	end
+
+	if isLockedServiceInstance(instance) then
+		return false, "Cannot rename or move locked service " .. tostring(instance.Name)
 	end
 
 	local segments = splitPath(newPath)
@@ -625,16 +674,17 @@ function Deserializer.renameAtPath(oldPath, newPath)
 	return true
 end
 
-function Deserializer.applyTree(tree)
+function Deserializer.applyTree(tree, options)
 	if type(tree) ~= "table" or type(tree.services) ~= "table" then
 		return false, "Expected a tree with services."
 	end
 
 	local errors = {}
+	local progressState = createProgressState(options, countTreeInstances(tree))
 	ChangeHistoryService:SetWaypoint("Before RoSync Apply")
 
 	for _, serviceNode in ipairs(tree.services) do
-		local success, result = applyServiceNode(serviceNode)
+		local success, result = applyServiceNode(serviceNode, progressState)
 		if not success then
 			table.insert(errors, tostring(result))
 		end
@@ -646,7 +696,7 @@ function Deserializer.applyTree(tree)
 		return false, table.concat(errors, "\n")
 	end
 
-	return true
+	return true, nil, progressState and progressState.done or countTreeInstances(tree)
 end
 
 return Deserializer
