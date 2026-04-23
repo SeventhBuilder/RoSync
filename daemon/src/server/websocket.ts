@@ -59,6 +59,14 @@ function safeSend(socket: WebSocket, payload: unknown): void {
   socket.send(JSON.stringify(payload));
 }
 
+function previewMessageText(text: string, maxLength = 200): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength)}...`;
+}
+
 async function handleSchemaQuery(schema: SchemaCache, className: string | null): Promise<unknown> {
   if (!className) {
     return {
@@ -105,8 +113,30 @@ export function attachWebSocketServer(
     void emitSessionsChanged();
 
     socket.on("message", async (message) => {
+      const text = toMessageText(message);
+      if (text.length > 10_000_000) {
+        safeSend(socket, {
+          type: "ERROR",
+          code: "MESSAGE_TOO_LARGE",
+          message: `Message size ${text.length} exceeds 10MB limit.`,
+        });
+        return;
+      }
+
+      let payload: Record<string, unknown>;
       try {
-        const payload = JSON.parse(toMessageText(message)) as Record<string, unknown>;
+        payload = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        context.logger.error(`Failed to parse WebSocket message (${text.length} bytes): ${previewMessageText(text)}`);
+        safeSend(socket, {
+          type: "ERROR",
+          code: "PARSE_ERROR",
+          message: "Could not parse incoming message",
+        });
+        return;
+      }
+
+      try {
         const type = typeof payload.type === "string" ? payload.type : "UNKNOWN";
 
         switch (type) {
@@ -359,7 +389,7 @@ export function attachWebSocketServer(
         safeSend(socket, {
           type: "ERROR",
           code: "MALFORMED_MESSAGE",
-          message: "Could not parse incoming message.",
+          message: "Could not handle incoming message.",
         });
       }
     });
