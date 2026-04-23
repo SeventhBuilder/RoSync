@@ -1893,11 +1893,15 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 	function Serializer.serializeInstance(instance, deep)
 		local className = safeReadStringProperty(instance, "ClassName", "Instance")
 		local name = safeReadStringProperty(instance, "Name", className)
+		local properties = {}
+		local propertiesOrdered = {}
+		local sortedKeys = {}
 	
 		local serialized = {
 			name = name,
 			className = className,
-			properties = {},
+			properties = properties,
+			_propertyOrder = sortedKeys,
 			attributes = encodeAttributes(instance),
 			tags = safeGetTags(instance),
 			children = {},
@@ -1913,9 +1917,17 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 						encodedValue = table.clone(encodedValue)
 						encodedValue.readOnly = true
 					end
-					serialized.properties[propertyName] = encodedValue
+					table.insert(propertiesOrdered, {
+						k = propertyName,
+						v = encodedValue,
+					})
 				end
 			end
+		end
+	
+		for _, pair in ipairs(propertiesOrdered) do
+			properties[pair.k] = pair.v
+			table.insert(sortedKeys, pair.k)
 		end
 	
 		local source = safeScriptSource(instance, className)

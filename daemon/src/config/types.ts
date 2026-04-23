@@ -119,6 +119,7 @@ export interface SerializableNode {
   name?: string;
   className: string;
   properties?: Record<string, unknown>;
+  _propertyOrder?: string[];
   attributes?: Record<string, unknown>;
   tags?: string[];
   source?: string;

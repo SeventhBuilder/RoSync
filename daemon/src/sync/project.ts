@@ -43,8 +43,46 @@ async function exists(targetPath: string): Promise<boolean> {
   }
 }
 
-async function writeInstanceMetadataFile(filePath: string, metadata: InstanceMetadata): Promise<void> {
-  await fs.writeFile(filePath, JSON.stringify(metadata, null, 2) + "\n", "utf8");
+function orderRecordKeys(record: Record<string, unknown>, preferredOrder?: string[]): Record<string, unknown> {
+  const ordered: Record<string, unknown> = {};
+  const seenKeys = new Set<string>();
+
+  for (const key of preferredOrder ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(record, key) || seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    ordered[key] = record[key];
+  }
+
+  const remainingKeys = Object.keys(record)
+    .filter((key) => !seenKeys.has(key))
+    .sort((left, right) => left.localeCompare(right));
+  for (const key of remainingKeys) {
+    ordered[key] = record[key];
+  }
+
+  return ordered;
+}
+
+function writeInstanceJson(metadata: InstanceMetadata, propertyOrder?: string[]): string {
+  const ordered: Record<string, unknown> = {
+    className: metadata.className,
+    properties: orderRecordKeys(metadata.properties ?? {}, propertyOrder),
+    attributes: orderRecordKeys(metadata.attributes ?? {}),
+    tags: [...(metadata.tags ?? [])],
+    children: [...(metadata.children ?? [])],
+  };
+
+  return JSON.stringify(ordered, null, 2) + "\n";
+}
+
+async function writeInstanceMetadataFile(
+  filePath: string,
+  metadata: InstanceMetadata,
+  propertyOrder?: string[],
+): Promise<void> {
+  await fs.writeFile(filePath, writeInstanceJson(metadata, propertyOrder), "utf8");
 }
 
 function scriptDescriptorForClass(className: string): { fileName: string; kind: "server" | "client" | "module" } | null {
@@ -296,7 +334,7 @@ async function writeNodeDirectory(targetDirectory: string, payload: Serializable
   const descriptor = scriptDescriptorForClass(payload.className);
 
   await fs.mkdir(targetDirectory, { recursive: true });
-  await writeInstanceMetadataFile(path.join(targetDirectory, INSTANCE_FILE), metadata);
+  await writeInstanceMetadataFile(path.join(targetDirectory, INSTANCE_FILE), metadata, payload._propertyOrder);
 
   await removeKnownScriptFiles(targetDirectory);
   if (descriptor) {
@@ -339,7 +377,7 @@ export async function writeInstanceToDisk(config: ResolvedRoSyncConfig, nodePath
   const descriptor = scriptDescriptorForClass(normalizedPayload.className);
 
   await fs.mkdir(targetDirectory, { recursive: true });
-  await writeInstanceMetadataFile(metadataPath, metadata);
+  await writeInstanceMetadataFile(metadataPath, metadata, normalizedPayload._propertyOrder);
 
   if (descriptor && normalizedPayload.source !== undefined) {
     await fs.writeFile(path.join(targetDirectory, descriptor.fileName), normalizedPayload.source, "utf8");
