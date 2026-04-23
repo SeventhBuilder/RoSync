@@ -12,47 +12,51 @@ local READ_ONLY_INSTANCES = {
 	["Workspace/Camera"] = true,
 }
 
-local BLOCKED_SERVICES = {
-	CoreGui = true,
-	RobloxPluginGuiService = true,
-	PluginGuiService = true,
-	CorePackages = true,
-	StudioService = true,
-	ScriptEditorService = true,
-	PluginDebugService = true,
-	PluginPoliciesService = true,
-	UserInputService = true,
-	GuiService = true,
-	NetworkClient = true,
-	NetworkServer = true,
-	RobloxReplicatedStorage = true,
-	FriendService = true,
-	MarketplaceService = true,
-	AnalyticsService = true,
-	VoiceChatService = true,
-	PolicyService = true,
-	HttpRbxApiService = true,
-	NotificationService = true,
-	BadgeService = true,
-	KeyframeSequenceProvider = true,
+local ALLOWED_ROOT_SERVICES = {
+	Workspace = true,
+	Players = true,
+	Lighting = true,
+	MaterialService = true,
+	ReplicatedFirst = true,
+	ReplicatedStorage = true,
+	ServerScriptService = true,
+	ServerStorage = true,
+	StarterGui = true,
+	StarterPack = true,
+	StarterPlayer = true,
+	Teams = true,
+	SoundService = true,
+	TextChatService = true,
 }
 
-local function isRuntimePlayerInstance(instance)
-	local parent = instance.Parent
-	if parent and parent.ClassName == "Players" then
-		return instance:IsA("Player")
-	end
-
-	return false
-end
-
-local function isBlockedService(instance)
+local function topLevelAncestor(instance)
 	local current = instance
-	while current.Parent ~= game and current.Parent ~= nil do
+	while current and current.Parent ~= game and current.Parent ~= nil do
 		current = current.Parent
 	end
 
-	return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
+	return current
+end
+
+local function isAllowedRootService(instance)
+	local root = topLevelAncestor(instance)
+	if root == nil then
+		return false
+	end
+
+	return ALLOWED_ROOT_SERVICES[root.Name] == true
+end
+
+local function isRuntimePlayerInstance(instance)
+	local current = instance
+	while current and current ~= game do
+		if current:IsA("Player") then
+			return true
+		end
+		current = current.Parent
+	end
+
+	return false
 end
 
 local function getDebounceMs(instance, propertyName)
@@ -100,7 +104,7 @@ function Listener.shouldSyncInstance(instance, shouldSync)
 		return false
 	end
 
-	if isBlockedService(instance) then
+	if not isAllowedRootService(instance) then
 		return false
 	end
 

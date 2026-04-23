@@ -7,6 +7,7 @@ import { DEFAULT_SERVICES } from "../config/types.js";
 import { readInstanceMetadata, type InstanceMetadata } from "../serializer/instance.js";
 
 const INSTANCE_FILE = ".instance.json";
+const ALLOWED_ROOT_SERVICES = new Set(DEFAULT_SERVICES);
 const SCRIPT_FILE_BY_CLASS: Record<string, { fileName: string; kind: "server" | "client" | "module" }> = {
   Script: { fileName: "init.server.luau", kind: "server" },
   LocalScript: { fileName: "init.client.luau", kind: "client" },
@@ -141,6 +142,10 @@ async function readDirectoryNode(
 
   const metadata = await readInstanceMetadata(metadataPath);
   const name = path.basename(directoryPath);
+  if (!parentPath && !ALLOWED_ROOT_SERVICES.has(name)) {
+    counters.ignoredEntries += 1;
+    return null;
+  }
   const className = metadata?.className ?? name;
 
   if (shouldIgnoreClass(ignoreRules, className)) {

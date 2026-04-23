@@ -84,9 +84,15 @@ local function getPropertyNamesForClass(className)
 			local canWrite = prop.Permits == nil
 				or prop.Permits.Write ~= nil
 				or prop.Permits.WriteParallel ~= nil
+			local canRead = prop.Permits == nil
+				or prop.Permits.Read ~= nil
+				or prop.Permits.ReadParallel ~= nil
 			local lowercaseName = string.lower(name)
-			if canWrite and not seenLowercaseNames[lowercaseName] then
+			if not seenLowercaseNames[lowercaseName] and (canWrite or canRead) then
 				seenLowercaseNames[lowercaseName] = true
+				if not canWrite then
+					readOnlyNames[name] = true
+				end
 				table.insert(names, name)
 			end
 		end

@@ -10,6 +10,7 @@ local LOCKED_SERVICES = {
 	Workspace = true,
 	Players = true,
 	Lighting = true,
+	MaterialService = true,
 	ReplicatedFirst = true,
 	ReplicatedStorage = true,
 	ServerScriptService = true,

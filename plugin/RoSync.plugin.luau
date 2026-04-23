@@ -54,6 +54,8 @@ __modules['main.client'] = function(moduleRequire, script)
 	local SERVICE_NAMES = {
 		"Workspace",
 		"Players",
+		"Lighting",
+		"MaterialService",
 		"ReplicatedFirst",
 		"ReplicatedStorage",
 		"ServerScriptService",
@@ -62,8 +64,8 @@ __modules['main.client'] = function(moduleRequire, script)
 		"StarterPack",
 		"StarterPlayer",
 		"Teams",
-		"Lighting",
 		"SoundService",
+		"TextChatService",
 	}
 	
 	local toolbar = plugin:CreateToolbar("RoSync")
@@ -316,6 +318,22 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		return "Disk"
+	end
+	
+	local function isScriptClassName(className)
+		return className == "Script" or className == "LocalScript" or className == "ModuleScript"
+	end
+	
+	local function shouldLogIncomingUpdate(payload)
+		return type(payload) == "table"
+			and type(payload.data) == "table"
+			and isScriptClassName(payload.data.className)
+	end
+	
+	local function shouldLogStudioUpdate(instance, propertyName)
+		return instance ~= nil
+			and instance:IsA("LuaSourceContainer")
+			and propertyName == "Source"
 	end
 	
 	local function parentPathOf(pathValue)
@@ -697,7 +715,13 @@ __modules['main.client'] = function(moduleRequire, script)
 			applyInProgress = false
 	
 			if applied then
-				appendEvent(payload.origin, existedBefore and "update" or "add", payload.path)
+				if existedBefore then
+					if shouldLogIncomingUpdate(payload) then
+						appendEvent(payload.origin, "update", payload.path)
+					end
+				else
+					appendEvent(payload.origin, "add", payload.path)
+				end
 			else
 				appendInfo("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError), "warn")
 			end
@@ -826,7 +850,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		return true
 	end
 	
-	local function pushInstance(instance, action, shouldLogEvent)
+	local function pushInstance(instance, action, shouldLogEvent, propertyName)
 		local serialized = serializeSyncTree(instance)
 		if not serialized then
 			return false
@@ -839,7 +863,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			data = serialized,
 		})
 	
-		if sent and shouldLogEvent then
+		if sent and shouldLogEvent and (action ~= "update" or shouldLogStudioUpdate(instance, propertyName)) then
 			appendEvent("studio", action or "update", instancePath)
 		end
 	
@@ -849,6 +873,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	local function collectPushAllInstances()
 		local instances = {}
 		local seenPaths = {}
+		local duplicatePaths = {}
 	
 		for _, serviceName in ipairs(SERVICE_NAMES) do
 			local success, service = pcall(function()
@@ -860,6 +885,8 @@ __modules['main.client'] = function(moduleRequire, script)
 				if not seenPaths[servicePath] then
 					seenPaths[servicePath] = true
 					table.insert(instances, service)
+				else
+					duplicatePaths[servicePath] = (duplicatePaths[servicePath] or 0) + 1
 				end
 			end
 		end
@@ -870,11 +897,13 @@ __modules['main.client'] = function(moduleRequire, script)
 				if not seenPaths[instancePath] then
 					seenPaths[instancePath] = true
 					table.insert(instances, descendant)
+				else
+					duplicatePaths[instancePath] = (duplicatePaths[instancePath] or 0) + 1
 				end
 			end
 		end
 	
-		return instances
+		return instances, duplicatePaths
 	end
 	
 	local function flushPushBatch(batch)
@@ -900,8 +929,22 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		appendInfo("Starting Push All...")
 	
-		local instances = collectPushAllInstances()
+		local instances, duplicatePaths = collectPushAllInstances()
 		appendInfo(string.format("Pushing %d instances...", #instances))
+	
+		local duplicateCount = 0
+		for _ in pairs(duplicatePaths) do
+			duplicateCount += 1
+		end
+		if duplicateCount > 0 then
+			appendInfo(
+				string.format(
+					"Skipped %d duplicate path collision(s) during Push All. Instances with the same name under one parent still need a unique disk identity model.",
+					duplicateCount
+				),
+				"warn"
+			)
+		end
 	
 		local batch = {}
 		local batchSize = 50
@@ -945,8 +988,8 @@ __modules['main.client'] = function(moduleRequire, script)
 			onAdded = function(instance)
 				pushInstance(instance, "add", true)
 			end,
-			onChanged = function(instance)
-				pushInstance(instance, "update", true)
+			onChanged = function(instance, propertyName)
+				pushInstance(instance, "update", true, propertyName)
 			end,
 			onRenamed = function(instance, oldPath, newPath)
 				local serialized = Serializer.serializeInstance(instance, true)
@@ -1348,47 +1391,51 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 		["Workspace/Camera"] = true,
 	}
 	
-	local BLOCKED_SERVICES = {
-		CoreGui = true,
-		RobloxPluginGuiService = true,
-		PluginGuiService = true,
-		CorePackages = true,
-		StudioService = true,
-		ScriptEditorService = true,
-		PluginDebugService = true,
-		PluginPoliciesService = true,
-		UserInputService = true,
-		GuiService = true,
-		NetworkClient = true,
-		NetworkServer = true,
-		RobloxReplicatedStorage = true,
-		FriendService = true,
-		MarketplaceService = true,
-		AnalyticsService = true,
-		VoiceChatService = true,
-		PolicyService = true,
-		HttpRbxApiService = true,
-		NotificationService = true,
-		BadgeService = true,
-		KeyframeSequenceProvider = true,
+	local ALLOWED_ROOT_SERVICES = {
+		Workspace = true,
+		Players = true,
+		Lighting = true,
+		MaterialService = true,
+		ReplicatedFirst = true,
+		ReplicatedStorage = true,
+		ServerScriptService = true,
+		ServerStorage = true,
+		StarterGui = true,
+		StarterPack = true,
+		StarterPlayer = true,
+		Teams = true,
+		SoundService = true,
+		TextChatService = true,
 	}
 	
-	local function isRuntimePlayerInstance(instance)
-		local parent = instance.Parent
-		if parent and parent.ClassName == "Players" then
-			return instance:IsA("Player")
-		end
-	
-		return false
-	end
-	
-	local function isBlockedService(instance)
+	local function topLevelAncestor(instance)
 		local current = instance
-		while current.Parent ~= game and current.Parent ~= nil do
+		while current and current.Parent ~= game and current.Parent ~= nil do
 			current = current.Parent
 		end
 	
-		return BLOCKED_SERVICES[current.Name] == true or BLOCKED_SERVICES[current.ClassName] == true
+		return current
+	end
+	
+	local function isAllowedRootService(instance)
+		local root = topLevelAncestor(instance)
+		if root == nil then
+			return false
+		end
+	
+		return ALLOWED_ROOT_SERVICES[root.Name] == true
+	end
+	
+	local function isRuntimePlayerInstance(instance)
+		local current = instance
+		while current and current ~= game do
+			if current:IsA("Player") then
+				return true
+			end
+			current = current.Parent
+		end
+	
+		return false
 	end
 	
 	local function getDebounceMs(instance, propertyName)
@@ -1436,7 +1483,7 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			return false
 		end
 	
-		if isBlockedService(instance) then
+		if not isAllowedRootService(instance) then
 			return false
 		end
 	
@@ -1716,9 +1763,15 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 				local canWrite = prop.Permits == nil
 					or prop.Permits.Write ~= nil
 					or prop.Permits.WriteParallel ~= nil
+				local canRead = prop.Permits == nil
+					or prop.Permits.Read ~= nil
+					or prop.Permits.ReadParallel ~= nil
 				local lowercaseName = string.lower(name)
-				if canWrite and not seenLowercaseNames[lowercaseName] then
+				if not seenLowercaseNames[lowercaseName] and (canWrite or canRead) then
 					seenLowercaseNames[lowercaseName] = true
+					if not canWrite then
+						readOnlyNames[name] = true
+					end
 					table.insert(names, name)
 				end
 			end
@@ -1962,6 +2015,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		Workspace = true,
 		Players = true,
 		Lighting = true,
+		MaterialService = true,
 		ReplicatedFirst = true,
 		ReplicatedStorage = true,
 		ServerScriptService = true,

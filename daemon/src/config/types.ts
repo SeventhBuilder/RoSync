@@ -142,6 +142,8 @@ export interface RuntimeState {
 export const DEFAULT_SERVICES = [
   "Workspace",
   "Players",
+  "Lighting",
+  "MaterialService",
   "ReplicatedFirst",
   "ReplicatedStorage",
   "ServerScriptService",
@@ -150,8 +152,8 @@ export const DEFAULT_SERVICES = [
   "StarterPack",
   "StarterPlayer",
   "Teams",
-  "Lighting",
   "SoundService",
+  "TextChatService",
 ];
 
 export const DEFAULT_CONFIG: RoSyncConfig = {

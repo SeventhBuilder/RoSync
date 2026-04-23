@@ -11,6 +11,8 @@ local DEFAULT_SERVER_URL = "http://127.0.0.1:34872"
 local SERVICE_NAMES = {
 	"Workspace",
 	"Players",
+	"Lighting",
+	"MaterialService",
 	"ReplicatedFirst",
 	"ReplicatedStorage",
 	"ServerScriptService",
@@ -19,8 +21,8 @@ local SERVICE_NAMES = {
 	"StarterPack",
 	"StarterPlayer",
 	"Teams",
-	"Lighting",
 	"SoundService",
+	"TextChatService",
 }
 
 local toolbar = plugin:CreateToolbar("RoSync")
@@ -273,6 +275,22 @@ local function originLabel(origin)
 	end
 
 	return "Disk"
+end
+
+local function isScriptClassName(className)
+	return className == "Script" or className == "LocalScript" or className == "ModuleScript"
+end
+
+local function shouldLogIncomingUpdate(payload)
+	return type(payload) == "table"
+		and type(payload.data) == "table"
+		and isScriptClassName(payload.data.className)
+end
+
+local function shouldLogStudioUpdate(instance, propertyName)
+	return instance ~= nil
+		and instance:IsA("LuaSourceContainer")
+		and propertyName == "Source"
 end
 
 local function parentPathOf(pathValue)
@@ -654,7 +672,13 @@ local function handleSocketMessage(message)
 		applyInProgress = false
 
 		if applied then
-			appendEvent(payload.origin, existedBefore and "update" or "add", payload.path)
+			if existedBefore then
+				if shouldLogIncomingUpdate(payload) then
+					appendEvent(payload.origin, "update", payload.path)
+				end
+			else
+				appendEvent(payload.origin, "add", payload.path)
+			end
 		else
 			appendInfo("Sync apply failed for " .. payload.path .. ": " .. tostring(applyError), "warn")
 		end
@@ -783,7 +807,7 @@ connectSocket = function(isReconnect)
 	return true
 end
 
-local function pushInstance(instance, action, shouldLogEvent)
+local function pushInstance(instance, action, shouldLogEvent, propertyName)
 	local serialized = serializeSyncTree(instance)
 	if not serialized then
 		return false
@@ -796,7 +820,7 @@ local function pushInstance(instance, action, shouldLogEvent)
 		data = serialized,
 	})
 
-	if sent and shouldLogEvent then
+	if sent and shouldLogEvent and (action ~= "update" or shouldLogStudioUpdate(instance, propertyName)) then
 		appendEvent("studio", action or "update", instancePath)
 	end
 
@@ -806,6 +830,7 @@ end
 local function collectPushAllInstances()
 	local instances = {}
 	local seenPaths = {}
+	local duplicatePaths = {}
 
 	for _, serviceName in ipairs(SERVICE_NAMES) do
 		local success, service = pcall(function()
@@ -817,6 +842,8 @@ local function collectPushAllInstances()
 			if not seenPaths[servicePath] then
 				seenPaths[servicePath] = true
 				table.insert(instances, service)
+			else
+				duplicatePaths[servicePath] = (duplicatePaths[servicePath] or 0) + 1
 			end
 		end
 	end
@@ -827,11 +854,13 @@ local function collectPushAllInstances()
 			if not seenPaths[instancePath] then
 				seenPaths[instancePath] = true
 				table.insert(instances, descendant)
+			else
+				duplicatePaths[instancePath] = (duplicatePaths[instancePath] or 0) + 1
 			end
 		end
 	end
 
-	return instances
+	return instances, duplicatePaths
 end
 
 local function flushPushBatch(batch)
@@ -857,8 +886,22 @@ pushAll = function()
 
 	appendInfo("Starting Push All...")
 
-	local instances = collectPushAllInstances()
+	local instances, duplicatePaths = collectPushAllInstances()
 	appendInfo(string.format("Pushing %d instances...", #instances))
+
+	local duplicateCount = 0
+	for _ in pairs(duplicatePaths) do
+		duplicateCount += 1
+	end
+	if duplicateCount > 0 then
+		appendInfo(
+			string.format(
+				"Skipped %d duplicate path collision(s) during Push All. Instances with the same name under one parent still need a unique disk identity model.",
+				duplicateCount
+			),
+			"warn"
+		)
+	end
 
 	local batch = {}
 	local batchSize = 50
@@ -902,8 +945,8 @@ local function startWatch()
 		onAdded = function(instance)
 			pushInstance(instance, "add", true)
 		end,
-		onChanged = function(instance)
-			pushInstance(instance, "update", true)
+		onChanged = function(instance, propertyName)
+			pushInstance(instance, "update", true, propertyName)
 		end,
 		onRenamed = function(instance, oldPath, newPath)
 			local serialized = Serializer.serializeInstance(instance, true)

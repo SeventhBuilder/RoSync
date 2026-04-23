@@ -26,7 +26,7 @@ rosync watch
 \`\`\`
 `;
 
-const INIT_SCAFFOLD_SERVICES = Array.from(new Set([...DEFAULT_SERVICES, "TextChatService"]));
+const INIT_SCAFFOLD_SERVICES = [...DEFAULT_SERVICES];
 
 const EMPTY_INSTANCE = (className: string) =>
   JSON.stringify(
