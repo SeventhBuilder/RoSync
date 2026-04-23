@@ -94,6 +94,12 @@ local function getPropertyNamesForClass(className)
 	return names
 end
 
+local function sortedPropertyNamesForClass(className)
+	local names = table.clone(getPropertyNamesForClass(className))
+	table.sort(names)
+	return names
+end
+
 -- ── Value encoder ─────────────────────────────────────────────────────────────
 
 local function encodeNumber(value)
@@ -245,7 +251,7 @@ function Serializer.serializeInstance(instance, deep)
 		children = {},
 	}
 
-	for _, propertyName in ipairs(getPropertyNamesForClass(className)) do
+	for _, propertyName in ipairs(sortedPropertyNamesForClass(className)) do
 		local success, propertyValue = safeReadProperty(instance, propertyName)
 		if success then
 			local encodedValue = encodeValue(propertyValue)

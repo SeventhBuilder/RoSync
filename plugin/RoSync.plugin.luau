@@ -1655,6 +1655,12 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 		return names
 	end
 	
+	local function sortedPropertyNamesForClass(className)
+		local names = table.clone(getPropertyNamesForClass(className))
+		table.sort(names)
+		return names
+	end
+	
 	-- ── Value encoder ─────────────────────────────────────────────────────────────
 	
 	local function encodeNumber(value)
@@ -1806,7 +1812,7 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			children = {},
 		}
 	
-		for _, propertyName in ipairs(getPropertyNamesForClass(className)) do
+		for _, propertyName in ipairs(sortedPropertyNamesForClass(className)) do
 			local success, propertyValue = safeReadProperty(instance, propertyName)
 			if success then
 				local encodedValue = encodeValue(propertyValue)
