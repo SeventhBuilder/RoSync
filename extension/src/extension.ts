@@ -150,97 +150,117 @@ function statusBarTextForState(state: ConnectionState): string {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const daemonClient = new DaemonClient();
-  const explorerProvider = new ExplorerProvider(daemonClient);
-  const propertiesProvider = new PropertiesProvider(daemonClient);
-  const statusProvider = new StatusProvider(daemonClient);
-  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.text = statusBarTextForState("connecting");
-  statusBarItem.tooltip = "RoSync daemon connection status";
-  statusBarItem.command = "rosync.refreshExplorer";
-  statusBarItem.show();
-  const explorerTreeView = vscode.window.createTreeView("rosync.explorer", {
-    treeDataProvider: explorerProvider,
-  });
+  const output = vscode.window.createOutputChannel("RoSync");
+  context.subscriptions.push(output);
 
-  context.subscriptions.push(
-    daemonClient,
-    explorerProvider,
-    statusProvider,
-    propertiesProvider,
-    statusBarItem,
-    explorerTreeView,
-    vscode.window.registerWebviewViewProvider("rosync.properties", propertiesProvider, {
-      webviewOptions: {
-        retainContextWhenHidden: true,
-      },
-    }),
-    vscode.window.registerTreeDataProvider("rosync.status", statusProvider),
-    vscode.commands.registerCommand("rosync.refreshExplorer", async () => {
-      await explorerProvider.refresh();
-      await statusProvider.refresh();
-    }),
-    vscode.commands.registerCommand("rosync.openSource", openSource),
-    vscode.commands.registerCommand("rosync.copyPath", copyPath),
-    vscode.commands.registerCommand("rosync.createInstance", (node?: ProjectTreeNode) =>
-      createInstance(daemonClient, explorerProvider, node),
-    ),
-    vscode.commands.registerCommand("rosync.renameNode", (node?: ProjectTreeNode) =>
-      renameInstance(daemonClient, explorerProvider, node),
-    ),
-    vscode.commands.registerCommand("rosync.deleteNode", (node?: ProjectTreeNode) =>
-      deleteInstance(daemonClient, explorerProvider, node),
-    ),
-    vscode.workspace.onDidSaveTextDocument((document) => {
-      const nodePath = inferRoSyncNodePath(document.uri);
-      if (!nodePath) {
-        return;
+  try {
+    const daemonClient = new DaemonClient();
+    const explorerProvider = new ExplorerProvider(daemonClient);
+    const propertiesProvider = new PropertiesProvider(daemonClient);
+    const statusProvider = new StatusProvider(daemonClient);
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    statusBarItem.text = statusBarTextForState("connecting");
+    statusBarItem.tooltip = "RoSync daemon connection status";
+    statusBarItem.command = "rosync.refreshExplorer";
+    statusBarItem.show();
+    const explorerTreeView = vscode.window.createTreeView("rosync.explorer", {
+      treeDataProvider: explorerProvider,
+    });
+
+    context.subscriptions.push(
+      daemonClient,
+      explorerProvider,
+      statusProvider,
+      propertiesProvider,
+      statusBarItem,
+      explorerTreeView,
+      vscode.window.registerWebviewViewProvider("rosync.properties", propertiesProvider, {
+        webviewOptions: {
+          retainContextWhenHidden: true,
+        },
+      }),
+      vscode.window.registerTreeDataProvider("rosync.status", statusProvider),
+      vscode.commands.registerCommand("rosync.refreshExplorer", async () => {
+        await explorerProvider.refresh();
+        await statusProvider.refresh();
+      }),
+      vscode.commands.registerCommand("rosync.openSource", openSource),
+      vscode.commands.registerCommand("rosync.copyPath", copyPath),
+      vscode.commands.registerCommand("rosync.createInstance", (node?: ProjectTreeNode) =>
+        createInstance(daemonClient, explorerProvider, node),
+      ),
+      vscode.commands.registerCommand("rosync.renameNode", (node?: ProjectTreeNode) =>
+        renameInstance(daemonClient, explorerProvider, node),
+      ),
+      vscode.commands.registerCommand("rosync.deleteNode", (node?: ProjectTreeNode) =>
+        deleteInstance(daemonClient, explorerProvider, node),
+      ),
+      vscode.workspace.onDidSaveTextDocument((document) => {
+        const nodePath = inferRoSyncNodePath(document.uri);
+        if (!nodePath) {
+          return;
+        }
+
+        daemonClient.reportEditorActivity({
+          action: "update",
+          path: nodePath,
+        });
+      }),
+    );
+
+    context.subscriptions.push(
+      vscode.window.createTreeView("rosync.git", {
+        treeDataProvider: {
+          getTreeItem: (item: vscode.TreeItem) => item,
+          getChildren: () => [new vscode.TreeItem("Git integration foundation", vscode.TreeItemCollapsibleState.None)],
+        },
+      }),
+      vscode.window.createTreeView("rosync.agent", {
+        treeDataProvider: {
+          getTreeItem: (item: vscode.TreeItem) => item,
+          getChildren: () => [new vscode.TreeItem("AI agent foundation", vscode.TreeItemCollapsibleState.None)],
+        },
+      }),
+    );
+
+    explorerTreeView.onDidChangeSelection((event) => {
+      propertiesProvider.setSelectedNode(explorerProvider.selectedData(event.selection[0]));
+    });
+
+    context.subscriptions.push(
+      daemonClient.onDidReceiveEvent((event) => {
+        if (event.type === "CONNECTION_STATE") {
+          statusBarItem.text = statusBarTextForState(event.state);
+          statusBarItem.tooltip = event.endpoint
+            ? `RoSync daemon: ${event.endpoint.host}:${event.endpoint.port}`
+            : "RoSync daemon connection status";
+        } else if (event.type === "CONFLICT") {
+          void vscode.window.showWarningMessage(`RoSync conflict detected at ${event.conflict.path}`);
+        } else if (event.type === "ERROR") {
+          statusBarItem.text = "$(warning) RoSync Error";
+        }
+      }),
+    );
+
+    void daemonClient.start().catch((error) => {
+      const message = String((error as Error).message ?? error);
+      output.appendLine(`RoSync daemon connection failed: ${message}`);
+      if (error instanceof Error && error.stack) {
+        output.appendLine(error.stack);
       }
-
-      daemonClient.reportEditorActivity({
-        action: "update",
-        path: nodePath,
-      });
-    }),
-  );
-
-  context.subscriptions.push(
-    vscode.window.createTreeView("rosync.git", {
-      treeDataProvider: {
-        getTreeItem: (item: vscode.TreeItem) => item,
-        getChildren: () => [new vscode.TreeItem("Git integration foundation", vscode.TreeItemCollapsibleState.None)],
-      },
-    }),
-    vscode.window.createTreeView("rosync.agent", {
-      treeDataProvider: {
-        getTreeItem: (item: vscode.TreeItem) => item,
-        getChildren: () => [new vscode.TreeItem("AI agent foundation", vscode.TreeItemCollapsibleState.None)],
-      },
-    }),
-  );
-
-  explorerTreeView.onDidChangeSelection((event) => {
-    propertiesProvider.setSelectedNode(explorerProvider.selectedData(event.selection[0]));
-  });
-
-  context.subscriptions.push(
-    daemonClient.onDidReceiveEvent((event) => {
-      if (event.type === "CONNECTION_STATE") {
-        statusBarItem.text = statusBarTextForState(event.state);
-        statusBarItem.tooltip = event.endpoint ? `RoSync daemon: ${event.endpoint.host}:${event.endpoint.port}` : "RoSync daemon connection status";
-      } else if (event.type === "CONFLICT") {
-        void vscode.window.showWarningMessage(`RoSync conflict detected at ${event.conflict.path}`);
-      } else if (event.type === "ERROR") {
-        statusBarItem.text = "$(warning) RoSync Error";
-      }
-    }),
-  );
-
-  void daemonClient.start().catch((error) => {
-    void vscode.window.showWarningMessage(`RoSync daemon connection failed: ${String((error as Error).message ?? error)}`);
-  });
-  void explorerProvider.refresh();
-  void statusProvider.refresh();
+      void vscode.window.showWarningMessage(`RoSync daemon connection failed: ${message}`);
+    });
+    void explorerProvider.refresh();
+    void statusProvider.refresh();
+  } catch (error) {
+    const message = String((error as Error).message ?? error);
+    output.appendLine(`Activation failed: ${message}`);
+    if (error instanceof Error && error.stack) {
+      output.appendLine(error.stack);
+    }
+    output.show(true);
+    void vscode.window.showErrorMessage(`RoSync activation failed: ${message}`);
+  }
 }
 
 export function deactivate(): void {}

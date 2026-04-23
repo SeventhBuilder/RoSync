@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { type DaemonEvent, DaemonClient, type ProjectTreeNode, type ProjectTreeSnapshot } from "../daemon/DaemonClient.js";
-import { iconIdForClass } from "./IconMapper.js";
+import { getIcon } from "./IconMapper.js";
 
 function cloneNode(node: ProjectTreeNode): ProjectTreeNode {
   return {
@@ -73,7 +73,7 @@ export class ExplorerNode extends vscode.TreeItem {
     this.description = this.isConflict ? `[${data.className}] conflict` : `[${data.className}]`;
     this.tooltip = `${data.path}\n${data.className}`;
     this.contextValue = "rosyncExplorer.node";
-    this.iconPath = this.isConflict ? new vscode.ThemeIcon("warning") : new vscode.ThemeIcon(iconIdForClass(data.className, data.children.length > 0));
+    this.iconPath = this.isConflict ? new vscode.ThemeIcon("warning") : getIcon(data.className);
     this.resourceUri = vscode.Uri.file(data.sourceFilePath ?? data.metadataPath);
     this.command = {
       command: "rosync.openSource",
