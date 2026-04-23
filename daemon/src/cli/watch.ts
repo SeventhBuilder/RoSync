@@ -19,6 +19,7 @@ import {
   renameNode as renameProjectNodeOnDisk,
   updateNode as updateProjectNodeOnDisk,
   upsertNodeFromPayload as upsertProjectNodeOnDisk,
+  writeInstanceToDisk as writeInstanceToDiskOnDisk,
 } from "../sync/project.js";
 
 const logger: ServerLogger = {
@@ -148,6 +149,14 @@ export function registerWatchCommand(program: Command): void {
           await engine.handleStudioSync(nodePath, payload);
           await persistRuntimeState();
         },
+        pushBatchFromStudio: async (instances) => {
+          for (const entry of instances) {
+            engine.noteStudioEvent(entry.path);
+            await writeInstanceToDiskOnDisk(config, entry.path, entry.data);
+          }
+          await engine.reconcileDiskTree("studio");
+          await persistRuntimeState();
+        },
         removeFromStudio: async (nodePath) => {
           await engine.handleStudioRemove(nodePath);
           await persistRuntimeState();
@@ -212,6 +221,14 @@ export function registerWatchCommand(program: Command): void {
           },
           syncFromStudio: async (nodePath, payload) => {
             await engine.handleStudioSync(nodePath, payload);
+            await persistRuntimeState();
+          },
+          pushBatchFromStudio: async (instances) => {
+            for (const entry of instances) {
+              engine.noteStudioEvent(entry.path);
+              await writeInstanceToDiskOnDisk(config, entry.path, entry.data);
+            }
+            await engine.reconcileDiskTree("studio");
             await persistRuntimeState();
           },
           removeFromStudio: async (nodePath) => {

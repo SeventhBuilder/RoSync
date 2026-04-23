@@ -43,6 +43,10 @@ async function exists(targetPath: string): Promise<boolean> {
   }
 }
 
+async function writeInstanceMetadataFile(filePath: string, metadata: InstanceMetadata): Promise<void> {
+  await fs.writeFile(filePath, JSON.stringify(metadata, null, 2) + "\n", "utf8");
+}
+
 function scriptDescriptorForClass(className: string): { fileName: string; kind: "server" | "client" | "module" } | null {
   return SCRIPT_FILE_BY_CLASS[className] ?? null;
 }
@@ -292,7 +296,7 @@ async function writeNodeDirectory(targetDirectory: string, payload: Serializable
   const descriptor = scriptDescriptorForClass(payload.className);
 
   await fs.mkdir(targetDirectory, { recursive: true });
-  await fs.writeFile(path.join(targetDirectory, INSTANCE_FILE), JSON.stringify(metadata, null, 2) + "\n", "utf8");
+  await writeInstanceMetadataFile(path.join(targetDirectory, INSTANCE_FILE), metadata);
 
   await removeKnownScriptFiles(targetDirectory);
   if (descriptor) {
@@ -313,6 +317,38 @@ async function writeNodeDirectory(targetDirectory: string, payload: Serializable
   }
 
   void resolvedName;
+}
+
+export async function writeInstanceToDisk(config: ResolvedRoSyncConfig, nodePath: string, payload: SerializableNode): Promise<void> {
+  const targetDirectory = resolveNodePath(config, nodePath);
+  const targetName = path.basename(targetDirectory);
+  const normalizedPayload = { ...payload, name: payload.name ?? targetName };
+  const metadataPath = path.join(targetDirectory, INSTANCE_FILE);
+  const existingMetadata = await readInstanceMetadata(metadataPath);
+  const nextChildren =
+    payload.children && payload.children.length > 0
+      ? payload.children.map((child) => child.name ?? "Instance")
+      : existingMetadata?.children ?? [];
+  const metadata: InstanceMetadata = {
+    className: normalizedPayload.className,
+    properties: normalizedPayload.properties ?? {},
+    attributes: normalizedPayload.attributes ?? {},
+    tags: normalizedPayload.tags ?? [],
+    children: nextChildren,
+  };
+  const descriptor = scriptDescriptorForClass(normalizedPayload.className);
+
+  await fs.mkdir(targetDirectory, { recursive: true });
+  await writeInstanceMetadataFile(metadataPath, metadata);
+
+  if (descriptor && normalizedPayload.source !== undefined) {
+    await fs.writeFile(path.join(targetDirectory, descriptor.fileName), normalizedPayload.source, "utf8");
+  }
+
+  for (const child of normalizedPayload.children ?? []) {
+    const childName = child.name ?? "Instance";
+    await writeInstanceToDisk(config, `${nodePath}/${childName}`, { ...child, name: childName });
+  }
 }
 
 export async function upsertNodeFromPayload(config: ResolvedRoSyncConfig, nodePath: string, payload: SerializableNode): Promise<void> {
@@ -378,7 +414,7 @@ export async function updateNode(
     children: metadata.children ?? [],
   };
 
-  await fs.writeFile(metadataPath, JSON.stringify(nextMetadata, null, 2) + "\n", "utf8");
+  await writeInstanceMetadataFile(metadataPath, nextMetadata);
 
   const descriptor = scriptDescriptorForClass(nextMetadata.className);
   if (descriptor && patch.source !== undefined) {

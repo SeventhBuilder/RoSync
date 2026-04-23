@@ -41,6 +41,7 @@ export interface WatchServerContext {
   moveProjectNode(oldPath: string, newPath: string): Promise<void>;
   deleteProjectNode(nodePath: string): Promise<void>;
   syncFromStudio(nodePath: string, payload: SerializableNode): Promise<void>;
+  pushBatchFromStudio(instances: Array<{ path: string; data: SerializableNode }>): Promise<void>;
   removeFromStudio(nodePath: string): Promise<void>;
   renameFromStudio(oldPath: string, newPath: string): Promise<void>;
   noteEditorActivity(activity: {

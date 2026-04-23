@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type http from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
+import type { SerializableNode } from "../config/types.js";
 import type { SchemaCache } from "../schema/types.js";
 import type { WatchServerContext } from "./types.js";
 
@@ -72,6 +73,10 @@ async function handleSchemaQuery(schema: SchemaCache, className: string | null):
     className,
     descriptor: schema.classes[className] ?? null,
   };
+}
+
+function isSerializableNodePayload(value: unknown): value is SerializableNode {
+  return typeof value === "object" && value !== null && typeof (value as { className?: unknown }).className === "string";
 }
 
 export function attachWebSocketServer(
@@ -163,6 +168,58 @@ export function attachWebSocketServer(
             safeSend(socket, {
               type: "ACK",
               message: "EDITOR_ACTIVITY recorded.",
+            });
+            break;
+          }
+          case "PUSH_BATCH": {
+            const instances = Array.isArray(payload.instances) ? payload.instances : null;
+            if (!instances) {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "INVALID_PUSH_BATCH",
+                message: "Expected instances for PUSH_BATCH.",
+              });
+              break;
+            }
+
+            const parsedInstances: Array<{ path: string; data: SerializableNode }> = [];
+            let invalidBatch = false;
+            for (const entry of instances) {
+              const instancePath =
+                typeof entry === "object" && entry !== null && typeof (entry as Record<string, unknown>).path === "string"
+                  ? ((entry as Record<string, unknown>).path as string)
+                  : null;
+              const data =
+                typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>).data : null;
+              if (!instancePath || !isSerializableNodePayload(data)) {
+                invalidBatch = true;
+                break;
+              }
+
+              parsedInstances.push({
+                path: instancePath,
+                data,
+              });
+            }
+
+            if (invalidBatch) {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "INVALID_PUSH_BATCH",
+                message: "Expected PUSH_BATCH entries with { path, data.className }.",
+              });
+              break;
+            }
+
+            await context.pushBatchFromStudio(parsedInstances);
+            context.broadcastToClients("editor", {
+              type: "BATCH_SYNCED",
+              count: parsedInstances.length,
+            });
+            safeSend(socket, {
+              type: "ACK",
+              message: "PUSH_BATCH applied.",
+              count: parsedInstances.length,
             });
             break;
           }

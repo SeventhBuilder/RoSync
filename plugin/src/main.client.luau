@@ -234,7 +234,7 @@ local reconnectAttempt = 0
 local reconnectThread = nil
 local pollingThread = nil
 local connectSocket
-local pushServices
+local pushAll
 local statusMode = "disconnected"
 local suppressNextSocketCloseOutput = false
 
@@ -553,7 +553,7 @@ local function syncAfterHandshake()
 		local indexedInstances = daemonIndexedInstanceCount(statusResponse)
 		if indexedInstances == 0 then
 			appendInfo("Daemon has 0 indexed instances — pulling Studio state to disk instead of applying empty daemon state.")
-			pushServices()
+			pushAll()
 			return
 		end
 	elseif statusResponse ~= nil then
@@ -631,7 +631,7 @@ local function handleSocketMessage(message)
 	end
 
 	if payload.type == "PULL_REQUEST" then
-		pushServices()
+		pushAll()
 		return
 	end
 
@@ -791,25 +791,87 @@ local function pushInstance(instance, action, shouldLogEvent)
 	return sent
 end
 
-pushServices = function()
-	if not isSyncAllowed("Push All") then
-		return
-	end
-
-	local pushedCount = 0
+local function collectPushAllInstances()
+	local instances = {}
+	local seenPaths = {}
 
 	for _, serviceName in ipairs(SERVICE_NAMES) do
 		local success, service = pcall(function()
 			return game:GetService(serviceName)
 		end)
 
-		if success and service then
-			pushInstance(service, "update", false)
-			pushedCount += 1
+		if success and service and shouldSyncInstance(service) then
+			local servicePath = PathUtil.getInstancePath(service)
+			if not seenPaths[servicePath] then
+				seenPaths[servicePath] = true
+				table.insert(instances, service)
+			end
 		end
 	end
 
-	appendLog("Pushed " .. tostring(pushedCount) .. " top-level services to the daemon.")
+	for _, descendant in ipairs(game:GetDescendants()) do
+		if shouldSyncInstance(descendant) then
+			local instancePath = PathUtil.getInstancePath(descendant)
+			if not seenPaths[instancePath] then
+				seenPaths[instancePath] = true
+				table.insert(instances, descendant)
+			end
+		end
+	end
+
+	return instances
+end
+
+local function flushPushBatch(batch)
+	if #batch == 0 then
+		return true
+	end
+
+	return sendMessage({
+		type = "PUSH_BATCH",
+		instances = batch,
+	})
+end
+
+pushAll = function()
+	if not isSyncAllowed("Push All") then
+		return
+	end
+
+	if not socketClient or not socketClient:isConnected() then
+		appendInfo("Push All requires an active daemon connection.", "warn")
+		return
+	end
+
+	appendInfo("Starting Push All...")
+
+	local instances = collectPushAllInstances()
+	appendInfo(string.format("Pushing %d instances...", #instances))
+
+	local batch = {}
+	local batchSize = 50
+	local pushedCount = 0
+
+	for index, instance in ipairs(instances) do
+		table.insert(batch, {
+			path = PathUtil.getInstancePath(instance),
+			data = Serializer.serializeInstance(instance, false),
+		})
+
+		if #batch >= batchSize or index == #instances then
+			local sent = flushPushBatch(batch)
+			if not sent then
+				appendInfo("Push All batch send failed.", "warn")
+				break
+			end
+
+			pushedCount += #batch
+			batch = {}
+			task.wait(0.05)
+		end
+	end
+
+	appendInfo(string.format("Push All complete - %d instances synced", pushedCount))
 end
 
 local function startWatch()
@@ -915,7 +977,7 @@ pushAllButton.MouseButton1Click:Connect(function()
 		return
 	end
 
-	pushServices()
+	pushAll()
 end)
 
 pullAllButton.MouseButton1Click:Connect(function()
