@@ -1591,6 +1591,7 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 	}
 	
 	local propertyCache = {}
+	local readOnlyPropertyCache = {}
 	
 	-- ── Helpers ──────────────────────────────────────────────────────────────────
 	
@@ -1631,11 +1632,13 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 	
 		if not ok or type(props) ~= "table" then
 			propertyCache[className] = {}
+			readOnlyPropertyCache[className] = {}
 			return {}
 		end
 	
 		local names = {}
 		local seenLowercaseNames = {}
+		local readOnlyNames = {}
 		for _, prop in ipairs(props) do
 			local name = prop.Name
 			if type(name) == "string" and not PROPERTY_DENYLIST[name] then
@@ -1650,8 +1653,25 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			end
 		end
 	
+		if #names == 0 then
+			seenLowercaseNames = {}
+	
+			for _, prop in ipairs(props) do
+				local name = prop.Name
+				if type(name) == "string" and not PROPERTY_DENYLIST[name] then
+					local lowercaseName = string.lower(name)
+					if not seenLowercaseNames[lowercaseName] then
+						seenLowercaseNames[lowercaseName] = true
+						readOnlyNames[name] = true
+						table.insert(names, name)
+					end
+				end
+			end
+		end
+	
 		table.sort(names)
 		propertyCache[className] = names
+		readOnlyPropertyCache[className] = readOnlyNames
 		return names
 	end
 	
@@ -1812,11 +1832,16 @@ __modules['sync/Serializer'] = function(moduleRequire, script)
 			children = {},
 		}
 	
+		local readOnlyNames = readOnlyPropertyCache[className] or {}
 		for _, propertyName in ipairs(sortedPropertyNamesForClass(className)) do
 			local success, propertyValue = safeReadProperty(instance, propertyName)
 			if success then
 				local encodedValue = encodeValue(propertyValue)
 				if encodedValue ~= nil then
+					if readOnlyNames[propertyName] and type(encodedValue) == "table" then
+						encodedValue = table.clone(encodedValue)
+						encodedValue.readOnly = true
+					end
 					serialized.properties[propertyName] = encodedValue
 				end
 			end
