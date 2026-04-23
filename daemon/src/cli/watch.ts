@@ -56,11 +56,8 @@ export function registerWatchCommand(program: Command): void {
         void updateSchemaCache(config)
           .then(async (nextSchema) => {
             schemaCache = nextSchema;
-            logger.info(`Schema cache refreshed in background (${schemaCache.metadata.version ?? "unknown"}).`);
           })
-          .catch((error) => {
-            logger.warn(`Background schema refresh failed: ${String((error as Error).message ?? error)}`);
-          });
+          .catch(() => {});
       }
 
       let websocketRuntime: ReturnType<typeof attachWebSocketServer> | null = null;
