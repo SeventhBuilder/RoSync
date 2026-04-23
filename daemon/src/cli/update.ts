@@ -254,13 +254,20 @@ async function refreshInstalledArtifacts(sourceDir: string, metadata: InstallMet
 }
 
 function printCapturedOutput(result: CapturedCommandResult): void {
-  const stdout = result.stdout.trim();
-  const stderr = result.stderr.trim();
-  if (stdout) {
-    console.log(stdout);
+  const stdoutLines = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "" && line.trim() !== "Already up to date.");
+  const stderrLines = result.stderr
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "" && line.trim() !== "Already up to date.");
+
+  if (stdoutLines.length > 0) {
+    console.log(stdoutLines.join("\n"));
   }
-  if (stderr) {
-    console.error(stderr);
+  if (stderrLines.length > 0) {
+    console.error(stderrLines.join("\n"));
   }
 }
 
