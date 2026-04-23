@@ -89,6 +89,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	local TEXT_PRIMARY = Color3.fromRGB(241, 245, 249)
 	local STATUS_CONNECTED = Color3.fromRGB(34, 197, 94)
 	local STATUS_DISCONNECTED = Color3.fromRGB(239, 68, 68)
+	local STATUS_RECONNECTING = Color3.fromRGB(249, 115, 22)
 	local STATUS_CONFLICT = Color3.fromRGB(234, 179, 8)
 	local CONNECT_BLUE = Color3.fromRGB(59, 130, 246)
 	local DISCONNECT_RED = Color3.fromRGB(239, 68, 68)
@@ -170,25 +171,17 @@ __modules['main.client'] = function(moduleRequire, script)
 	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 	titleLabel.Parent = headerBar
 	
-	local statusPill = Instance.new("Frame")
-	statusPill.Size = UDim2.new(0, 126, 0, 30)
-	statusPill.Position = UDim2.new(1, -138, 0, 3)
-	statusPill.BackgroundColor3 = STATUS_DISCONNECTED
-	statusPill.BorderSizePixel = 0
-	statusPill.Parent = headerBar
+	local statusDot = Instance.new("Frame")
+	statusDot.Size = UDim2.new(0, 12, 0, 12)
+	statusDot.AnchorPoint = Vector2.new(1, 0.5)
+	statusDot.Position = UDim2.new(1, -10, 0.5, 0)
+	statusDot.BorderSizePixel = 0
+	statusDot.BackgroundColor3 = STATUS_DISCONNECTED
+	statusDot.Parent = headerBar
 	
-	local statusPillCorner = Instance.new("UICorner")
-	statusPillCorner.CornerRadius = UDim.new(0, 999)
-	statusPillCorner.Parent = statusPill
-	
-	local statusLabel = Instance.new("TextLabel")
-	statusLabel.Size = UDim2.fromScale(1, 1)
-	statusLabel.BackgroundTransparency = 1
-	statusLabel.Font = Enum.Font.GothamMedium
-	statusLabel.Text = "🔴 Disconnected"
-	statusLabel.TextColor3 = TEXT_PRIMARY
-	statusLabel.TextSize = 12
-	statusLabel.Parent = statusPill
+	local statusDotCorner = Instance.new("UICorner")
+	statusDotCorner.CornerRadius = UDim.new(1, 0)
+	statusDotCorner.Parent = statusDot
 	
 	local controlsFrame = Instance.new("Frame")
 	controlsFrame.Size = UDim2.new(1, -24, 0, 80)
@@ -424,19 +417,21 @@ __modules['main.client'] = function(moduleRequire, script)
 		statusMode = mode
 	
 		if mode == "connected" then
-			statusPill.BackgroundColor3 = STATUS_CONNECTED
-			statusLabel.Text = "🟢 Connected"
+			statusDot.BackgroundColor3 = STATUS_CONNECTED
+			return
+		end
+	
+		if mode == "reconnecting" then
+			statusDot.BackgroundColor3 = STATUS_RECONNECTING
 			return
 		end
 	
 		if mode == "conflict" then
-			statusPill.BackgroundColor3 = STATUS_CONFLICT
-			statusLabel.Text = "🟡 Conflict"
+			statusDot.BackgroundColor3 = STATUS_CONFLICT
 			return
 		end
 	
-		statusPill.BackgroundColor3 = STATUS_DISCONNECTED
-		statusLabel.Text = "🔴 Disconnected"
+		statusDot.BackgroundColor3 = STATUS_DISCONNECTED
 	end
 	
 	task.spawn(function()
@@ -633,6 +628,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		local delaySeconds = math.min(30, 2 ^ reconnectAttempt)
 		reconnectAttempt += 1
+		setStatus("reconnecting")
 		appendLog("Scheduling reconnect in " .. tostring(delaySeconds) .. "s.")
 		reconnectThread = task.delay(delaySeconds, function()
 			reconnectThread = nil
