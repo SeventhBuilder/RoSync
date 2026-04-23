@@ -219,6 +219,27 @@ async function readWorkspaceVersion(sourceDir: string): Promise<string | null> {
   }
 }
 
+async function ensureGeneratedArtifactsClean(sourceDir: string): Promise<void> {
+  const generatedPaths = ["plugin/RoSync.plugin.luau"];
+
+  for (const relativePath of generatedPaths) {
+    const statusResult = await runCommandCapture("git", ["-C", sourceDir, "status", "--porcelain", "--", relativePath], sourceDir);
+    if (statusResult.code !== 0) {
+      throw new Error(statusResult.stderr.trim() || `Unable to inspect ${relativePath} before update.`);
+    }
+
+    if (!statusResult.stdout.trim()) {
+      continue;
+    }
+
+    console.log(`Resetting generated artifact before pull: ${relativePath}`);
+    const restoreResult = await runCommandCapture("git", ["-C", sourceDir, "checkout", "--", relativePath], sourceDir);
+    if (restoreResult.code !== 0) {
+      throw new Error(restoreResult.stderr.trim() || `Unable to reset generated artifact: ${relativePath}`);
+    }
+  }
+}
+
 async function refreshInstalledArtifacts(sourceDir: string, metadata: InstallMetadata): Promise<void> {
   if (process.platform === "win32") {
     await runCommand(
@@ -268,6 +289,8 @@ export function registerUpdateCommand(program: Command): void {
       if (!(await commandExists("npm", sourceDir))) {
         throw new Error("npm is required for `rosync update`, but it was not found on PATH.");
       }
+
+      await ensureGeneratedArtifactsClean(sourceDir);
 
       const beforeHead = await runCommandCapture("git", ["-C", sourceDir, "rev-parse", "HEAD"], sourceDir);
       if (beforeHead.code !== 0) {
