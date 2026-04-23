@@ -1452,6 +1452,10 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 				return
 			end
 	
+			if not Listener.shouldSyncInstance(instance, shouldSync) then
+				return
+			end
+	
 			if changedConnections[instance] or nameChangedConnections[instance] then
 				return
 			end
@@ -1493,11 +1497,15 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 		end
 	
 		local function onAdded(instance)
+			if not Listener.shouldSyncInstance(instance, shouldSync) then
+				return
+			end
+	
 			lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
-			if Listener.shouldSyncInstance(instance, shouldSync) and callbacks.onAdded then
+			connectInstance(instance)
+			if callbacks.onAdded then
 				callbacks.onAdded(instance)
 			end
-			connectInstance(instance)
 		end
 	
 		local function onRemoving(instance)
@@ -1509,7 +1517,9 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 		end
 	
 		for _, descendant in ipairs(game:GetDescendants()) do
-			connectInstance(descendant)
+			if Listener.shouldSyncInstance(descendant, shouldSync) then
+				connectInstance(descendant)
+			end
 		end
 	
 		table.insert(connections, game.DescendantAdded:Connect(onAdded))

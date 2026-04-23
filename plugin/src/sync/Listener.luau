@@ -187,6 +187,10 @@ function Listener.attach(shouldSync, callbacks, options)
 			return
 		end
 
+		if not Listener.shouldSyncInstance(instance, shouldSync) then
+			return
+		end
+
 		if changedConnections[instance] or nameChangedConnections[instance] then
 			return
 		end
@@ -228,11 +232,15 @@ function Listener.attach(shouldSync, callbacks, options)
 	end
 
 	local function onAdded(instance)
+		if not Listener.shouldSyncInstance(instance, shouldSync) then
+			return
+		end
+
 		lastKnownPaths[instance] = PathUtil.getInstancePath(instance)
-		if Listener.shouldSyncInstance(instance, shouldSync) and callbacks.onAdded then
+		connectInstance(instance)
+		if callbacks.onAdded then
 			callbacks.onAdded(instance)
 		end
-		connectInstance(instance)
 	end
 
 	local function onRemoving(instance)
@@ -244,7 +252,9 @@ function Listener.attach(shouldSync, callbacks, options)
 	end
 
 	for _, descendant in ipairs(game:GetDescendants()) do
-		connectInstance(descendant)
+		if Listener.shouldSyncInstance(descendant, shouldSync) then
+			connectInstance(descendant)
+		end
 	end
 
 	table.insert(connections, game.DescendantAdded:Connect(onAdded))
