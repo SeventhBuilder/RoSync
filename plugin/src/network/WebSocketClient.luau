@@ -38,6 +38,26 @@ local function disconnect(connection)
 	end
 end
 
+local function isSocketOpen(socket)
+	local success, connectionState = pcall(function()
+		return socket.ConnectionState
+	end)
+
+	return success and connectionState == Enum.WebStreamClientState.Open
+end
+
+local function connectionStateLabel(socket)
+	local success, connectionState = pcall(function()
+		return socket.ConnectionState
+	end)
+
+	if success and connectionState ~= nil then
+		return tostring(connectionState)
+	end
+
+	return "unknown"
+end
+
 function WebSocketClient:connect()
 	if self.socket then
 		return self.isOpen, self.isOpen and nil or "WebSocket connection is already opening."
@@ -68,15 +88,28 @@ function WebSocketClient:connect()
 		settleEvent:Fire(result, message)
 	end
 
-	self.openConnection = socket.Opened:Connect(function(responseStatusCode, headers)
+	local function markOpen(responseStatusCode, headers)
+		if self.isOpen then
+			settle(true)
+			return
+		end
+
 		self.isOpen = true
 		if self.callbacks.onOpen then
 			self.callbacks.onOpen(responseStatusCode, headers)
 		end
 		settle(true)
+	end
+
+	self.openConnection = socket.Opened:Connect(function(responseStatusCode, headers)
+		markOpen(responseStatusCode, headers)
 	end)
 
 	self.messageConnection = socket.MessageReceived:Connect(function(message)
+		if not self.isOpen and isSocketOpen(socket) then
+			markOpen(nil, nil)
+		end
+
 		if self.callbacks.onMessage then
 			self.callbacks.onMessage(message)
 		end
@@ -112,8 +145,17 @@ function WebSocketClient:connect()
 		self:close()
 	end)
 
+	if isSocketOpen(socket) then
+		markOpen(nil, nil)
+	end
+
 	task.delay(5, function()
-		settle(false, "Timed out waiting for the WebSocket to open.")
+		if self.isOpen or isSocketOpen(socket) then
+			markOpen(nil, nil)
+			return
+		end
+
+		settle(false, "Timed out waiting for the WebSocket to open (state: " .. connectionStateLabel(socket) .. ").")
 	end)
 
 	local opened, errorMessage = settleEvent.Event:Wait()
