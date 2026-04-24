@@ -8,7 +8,7 @@ local Serializer = require(script.Parent.sync.Serializer)
 local PathUtil = require(script.Parent.util.PathUtil)
 
 local DEFAULT_SERVER_URL = "http://127.0.0.1:34872"
-local SERVICE_NAMES = {
+local SYNC_SERVICES = {
 	"Workspace",
 	"Players",
 	"Lighting",
@@ -827,42 +827,6 @@ local function pushInstance(instance, action, shouldLogEvent, propertyName)
 	return sent
 end
 
-local function collectPushAllInstances()
-	local instances = {}
-	local seenPaths = {}
-	local duplicatePaths = {}
-
-	for _, serviceName in ipairs(SERVICE_NAMES) do
-		local success, service = pcall(function()
-			return game:GetService(serviceName)
-		end)
-
-		if success and service and shouldSyncInstance(service) then
-			local servicePath = PathUtil.getInstancePath(service)
-			if not seenPaths[servicePath] then
-				seenPaths[servicePath] = true
-				table.insert(instances, service)
-			else
-				duplicatePaths[servicePath] = (duplicatePaths[servicePath] or 0) + 1
-			end
-		end
-	end
-
-	for _, descendant in ipairs(game:GetDescendants()) do
-		if shouldSyncInstance(descendant) then
-			local instancePath = PathUtil.getInstancePath(descendant)
-			if not seenPaths[instancePath] then
-				seenPaths[instancePath] = true
-				table.insert(instances, descendant)
-			else
-				duplicatePaths[instancePath] = (duplicatePaths[instancePath] or 0) + 1
-			end
-		end
-	end
-
-	return instances, duplicatePaths
-end
-
 local function flushPushBatch(batch)
 	if #batch == 0 then
 		return true
@@ -886,47 +850,55 @@ pushAll = function()
 
 	appendInfo("Starting Push All...")
 
-	local instances, duplicatePaths = collectPushAllInstances()
-	appendInfo(string.format("Pushing %d instances...", #instances))
-
-	local duplicateCount = 0
-	for _ in pairs(duplicatePaths) do
-		duplicateCount += 1
-	end
-	if duplicateCount > 0 then
-		appendInfo(
-			string.format(
-				"Skipped %d duplicate path collision(s) during Push All. Instances with the same name under one parent still need a unique disk identity model.",
-				duplicateCount
-			),
-			"warn"
-		)
-	end
-
-	local batch = {}
+	local grandTotal = 0
 	local batchSize = 50
-	local pushedCount = 0
 
-	for index, instance in ipairs(instances) do
-		table.insert(batch, {
-			path = PathUtil.getInstancePath(instance),
-			data = Serializer.serializeInstance(instance, false),
-		})
-
-		if #batch >= batchSize or index == #instances then
-			local sent = flushPushBatch(batch)
-			if not sent then
-				appendInfo("Push All batch send failed.", "warn")
-				break
-			end
-
-			pushedCount += #batch
-			batch = {}
-			task.wait(0.05)
+	for _, serviceName in ipairs(SYNC_SERVICES) do
+		local service = game:FindService(serviceName)
+		if not service then
+			continue
 		end
+
+		local instances = {}
+		for _, descendant in ipairs(service:GetDescendants()) do
+			if shouldSyncInstance(descendant) then
+				table.insert(instances, descendant)
+			end
+		end
+
+		if shouldSyncInstance(service) then
+			table.insert(instances, 1, service)
+		end
+
+		if #instances == 0 then
+			continue
+		end
+
+		local serviceCount = 0
+		local batch = {}
+		for index, instance in ipairs(instances) do
+			table.insert(batch, {
+				path = PathUtil.getInstancePath(instance),
+				data = Serializer.serializeInstance(instance, false),
+			})
+
+			if #batch >= batchSize or index == #instances then
+				local sent = flushPushBatch(batch)
+				if not sent then
+					appendInfo("Push All batch send failed.", "warn")
+				end
+
+				serviceCount += #batch
+				batch = {}
+				task.wait(0.05)
+			end
+		end
+
+		grandTotal += serviceCount
+		appendInfo(string.format("%s - %d instances", serviceName, serviceCount))
 	end
 
-	appendInfo(string.format("Push All complete - %d instances synced", pushedCount))
+	appendInfo(string.format("Push All complete - %d total instances", grandTotal))
 end
 
 local function startWatch()
