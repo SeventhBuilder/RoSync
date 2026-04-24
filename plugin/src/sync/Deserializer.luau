@@ -1,5 +1,6 @@
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local CollectionService = game:GetService("CollectionService")
+local PathUtil = require(script.Parent.Parent.util.PathUtil)
 
 local Deserializer = {}
 
@@ -334,7 +335,33 @@ local function applyProperties(instance, node)
 	return deferredPrimaryPart
 end
 
+local function findChildBySegment(parent, segment)
+	local exactMatch = parent:FindFirstChild(segment)
+	local baseName, ordinal = PathUtil.parsePathSegment(segment)
+	local matches = {}
+
+	for _, child in ipairs(parent:GetChildren()) do
+		if child.Name == baseName then
+			table.insert(matches, child)
+		end
+	end
+
+	if ordinal ~= nil then
+		if matches[ordinal] ~= nil then
+			return matches[ordinal]
+		end
+		return exactMatch
+	end
+
+	return exactMatch or matches[1]
+end
+
 local function findCandidateChild(parent, node)
+	local pathSegment = type(node) == "table" and (node._pathSegment or node.pathSegment) or nil
+	if type(pathSegment) == "string" and pathSegment ~= "" then
+		return findChildBySegment(parent, pathSegment)
+	end
+
 	local existing = parent:FindFirstChild(node.name)
 	if not existing then
 		return nil
@@ -430,6 +457,58 @@ local function getServiceRoot(serviceName)
 	return game:FindFirstChild(serviceName)
 end
 
+local function findOrCreateChildBySegment(parent, segment)
+	local exactMatch = parent:FindFirstChild(segment)
+	if exactMatch then
+		return exactMatch, exactMatch.Name
+	end
+
+	local baseName, ordinal = PathUtil.parsePathSegment(segment)
+	local matches = {}
+
+	for _, child in ipairs(parent:GetChildren()) do
+		if child.Name == baseName then
+			table.insert(matches, child)
+		end
+	end
+
+	if ordinal == nil then
+		return matches[1], baseName
+	end
+
+	while #matches < ordinal do
+		local child = Instance.new("Folder")
+		child.Name = baseName
+		child.Parent = parent
+		table.insert(matches, child)
+	end
+
+	return matches[ordinal], baseName
+end
+
+local function resolveNameForSegment(parent, segment, currentInstance)
+	local exactMatch = parent and parent:FindFirstChild(segment) or nil
+	if exactMatch ~= nil and exactMatch ~= currentInstance then
+		return segment
+	end
+
+	local baseName, ordinal = PathUtil.parsePathSegment(segment)
+	if ordinal ~= nil and parent ~= nil then
+		local matchCount = 0
+		for _, child in ipairs(parent:GetChildren()) do
+			if child ~= currentInstance and child.Name == baseName then
+				matchCount += 1
+			end
+		end
+
+		if matchCount >= (ordinal - 1) then
+			return baseName
+		end
+	end
+
+	return segment
+end
+
 local function findInstanceByPath(pathValue)
 	local segments = splitPath(pathValue)
 	if #segments == 0 then
@@ -442,7 +521,7 @@ local function findInstanceByPath(pathValue)
 	end
 
 	for index = 2, #segments do
-		current = current:FindFirstChild(segments[index])
+		current = findChildBySegment(current, segments[index])
 		if not current then
 			return nil
 		end
@@ -464,10 +543,10 @@ local function ensureParentForPath(pathValue)
 
 	for index = 2, #segments - 1 do
 		local segment = segments[index]
-		local child = current:FindFirstChild(segment)
+		local child, childName = findOrCreateChildBySegment(current, segment)
 		if not child then
 			child = Instance.new("Folder")
-			child.Name = segment
+			child.Name = childName
 			child.Parent = current
 		end
 		current = child
@@ -480,7 +559,8 @@ local applyNode
 
 local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState)
 	for _, childNode in ipairs(childNodes or {}) do
-		local childPath = joinPath(parentPath, childNode.name)
+		local childSegment = childNode._pathSegment or childNode.pathSegment or childNode.name
+		local childPath = joinPath(parentPath, childSegment)
 		if isReadOnlyPath(childPath) then
 			markProgress(progressState)
 			continue
@@ -559,13 +639,14 @@ function Deserializer.applySyncInstance(pathValue, node, options)
 
 	if #segments == 1 then
 		local success, result = applyServiceNode({
-			name = segments[1],
+			name = node.name or segments[1],
 			className = node.className or segments[1],
 			properties = node.properties or {},
 			attributes = node.attributes or {},
 			tags = node.tags or {},
 			source = node.source,
 			children = node.children or {},
+			_pathSegment = node._pathSegment or segments[1],
 		}, progressState)
 		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
 		return success, result, progressState and progressState.done or countNodeInstances(node)
@@ -576,14 +657,16 @@ function Deserializer.applySyncInstance(pathValue, node, options)
 		return false, parentError
 	end
 
+	local nodeName, _ = PathUtil.parsePathSegment(segments[#segments])
 	local childNode = {
-		name = segments[#segments],
+		name = node.name or nodeName,
 		className = node.className or "Folder",
 		properties = node.properties or {},
 		attributes = node.attributes or {},
 		tags = node.tags or {},
 		source = node.source,
 		children = node.children or {},
+		_pathSegment = node._pathSegment or segments[#segments],
 	}
 
 	local instance = findCandidateChild(parent, childNode)
@@ -663,7 +746,8 @@ function Deserializer.renameAtPath(oldPath, newPath)
 		if nextParent then
 			instance.Parent = nextParent
 		end
-		instance.Name = segments[#segments]
+		local nextName = resolveNameForSegment(instance.Parent, segments[#segments], instance)
+		instance.Name = nextName
 	end)
 
 	ChangeHistoryService:SetWaypoint("After RoSync Rename")

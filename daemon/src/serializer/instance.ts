@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 
 export interface InstanceMetadata {
+  name?: string;
   className: string;
   properties?: Record<string, unknown>;
   attributes?: Record<string, unknown>;

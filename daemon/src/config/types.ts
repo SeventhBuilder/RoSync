@@ -117,6 +117,7 @@ export interface ProjectTreeSnapshot {
 
 export interface SerializableNode {
   name?: string;
+  _pathSegment?: string;
   className: string;
   properties?: Record<string, unknown>;
   _propertyOrder?: string[];

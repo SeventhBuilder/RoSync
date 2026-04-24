@@ -2005,6 +2005,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local ChangeHistoryService = game:GetService("ChangeHistoryService")
 	local CollectionService = game:GetService("CollectionService")
+	local PathUtil = require(script.Parent.Parent.util.PathUtil)
 	
 	local Deserializer = {}
 	
@@ -2339,7 +2340,33 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		return deferredPrimaryPart
 	end
 	
+	local function findChildBySegment(parent, segment)
+		local exactMatch = parent:FindFirstChild(segment)
+		local baseName, ordinal = PathUtil.parsePathSegment(segment)
+		local matches = {}
+	
+		for _, child in ipairs(parent:GetChildren()) do
+			if child.Name == baseName then
+				table.insert(matches, child)
+			end
+		end
+	
+		if ordinal ~= nil then
+			if matches[ordinal] ~= nil then
+				return matches[ordinal]
+			end
+			return exactMatch
+		end
+	
+		return exactMatch or matches[1]
+	end
+	
 	local function findCandidateChild(parent, node)
+		local pathSegment = type(node) == "table" and (node._pathSegment or node.pathSegment) or nil
+		if type(pathSegment) == "string" and pathSegment ~= "" then
+			return findChildBySegment(parent, pathSegment)
+		end
+	
 		local existing = parent:FindFirstChild(node.name)
 		if not existing then
 			return nil
@@ -2435,6 +2462,58 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		return game:FindFirstChild(serviceName)
 	end
 	
+	local function findOrCreateChildBySegment(parent, segment)
+		local exactMatch = parent:FindFirstChild(segment)
+		if exactMatch then
+			return exactMatch, exactMatch.Name
+		end
+	
+		local baseName, ordinal = PathUtil.parsePathSegment(segment)
+		local matches = {}
+	
+		for _, child in ipairs(parent:GetChildren()) do
+			if child.Name == baseName then
+				table.insert(matches, child)
+			end
+		end
+	
+		if ordinal == nil then
+			return matches[1], baseName
+		end
+	
+		while #matches < ordinal do
+			local child = Instance.new("Folder")
+			child.Name = baseName
+			child.Parent = parent
+			table.insert(matches, child)
+		end
+	
+		return matches[ordinal], baseName
+	end
+	
+	local function resolveNameForSegment(parent, segment, currentInstance)
+		local exactMatch = parent and parent:FindFirstChild(segment) or nil
+		if exactMatch ~= nil and exactMatch ~= currentInstance then
+			return segment
+		end
+	
+		local baseName, ordinal = PathUtil.parsePathSegment(segment)
+		if ordinal ~= nil and parent ~= nil then
+			local matchCount = 0
+			for _, child in ipairs(parent:GetChildren()) do
+				if child ~= currentInstance and child.Name == baseName then
+					matchCount += 1
+				end
+			end
+	
+			if matchCount >= (ordinal - 1) then
+				return baseName
+			end
+		end
+	
+		return segment
+	end
+	
 	local function findInstanceByPath(pathValue)
 		local segments = splitPath(pathValue)
 		if #segments == 0 then
@@ -2447,7 +2526,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	
 		for index = 2, #segments do
-			current = current:FindFirstChild(segments[index])
+			current = findChildBySegment(current, segments[index])
 			if not current then
 				return nil
 			end
@@ -2469,10 +2548,10 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 		for index = 2, #segments - 1 do
 			local segment = segments[index]
-			local child = current:FindFirstChild(segment)
+			local child, childName = findOrCreateChildBySegment(current, segment)
 			if not child then
 				child = Instance.new("Folder")
-				child.Name = segment
+				child.Name = childName
 				child.Parent = current
 			end
 			current = child
@@ -2485,7 +2564,8 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 	local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState)
 		for _, childNode in ipairs(childNodes or {}) do
-			local childPath = joinPath(parentPath, childNode.name)
+			local childSegment = childNode._pathSegment or childNode.pathSegment or childNode.name
+			local childPath = joinPath(parentPath, childSegment)
 			if isReadOnlyPath(childPath) then
 				markProgress(progressState)
 				continue
@@ -2564,13 +2644,14 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 		if #segments == 1 then
 			local success, result = applyServiceNode({
-				name = segments[1],
+				name = node.name or segments[1],
 				className = node.className or segments[1],
 				properties = node.properties or {},
 				attributes = node.attributes or {},
 				tags = node.tags or {},
 				source = node.source,
 				children = node.children or {},
+				_pathSegment = node._pathSegment or segments[1],
 			}, progressState)
 			ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
 			return success, result, progressState and progressState.done or countNodeInstances(node)
@@ -2581,14 +2662,16 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			return false, parentError
 		end
 	
+		local nodeName, _ = PathUtil.parsePathSegment(segments[#segments])
 		local childNode = {
-			name = segments[#segments],
+			name = node.name or nodeName,
 			className = node.className or "Folder",
 			properties = node.properties or {},
 			attributes = node.attributes or {},
 			tags = node.tags or {},
 			source = node.source,
 			children = node.children or {},
+			_pathSegment = node._pathSegment or segments[#segments],
 		}
 	
 		local instance = findCandidateChild(parent, childNode)
@@ -2668,7 +2751,8 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			if nextParent then
 				instance.Parent = nextParent
 			end
-			instance.Name = segments[#segments]
+			local nextName = resolveNameForSegment(instance.Parent, segments[#segments], instance)
+			instance.Name = nextName
 		end)
 	
 		ChangeHistoryService:SetWaypoint("After RoSync Rename")
@@ -2713,12 +2797,98 @@ __modules['util/PathUtil'] = function(moduleRequire, script)
 	local require = moduleRequire
 	local PathUtil = {}
 	
+	local function getChildren(parent)
+		local success, children = pcall(function()
+			return parent:GetChildren()
+		end)
+	
+		if success and type(children) == "table" then
+			return children
+		end
+	
+		return {}
+	end
+	
+	local function getSiblingOccurrence(instance)
+		local parent = instance and instance.Parent
+		if parent == nil or parent == game then
+			return nil, 1
+		end
+	
+		local siblings = getChildren(parent)
+		local total = 0
+		local ordinal = 0
+		for _, sibling in ipairs(siblings) do
+			if sibling.Name == instance.Name then
+				total += 1
+				if sibling == instance then
+					ordinal = total
+				end
+			end
+		end
+	
+		if ordinal == 0 then
+			ordinal = 1
+		end
+	
+		return ordinal, total
+	end
+	
+	function PathUtil.encodePathSegment(name, ordinal, total)
+		if type(name) ~= "string" or name == "" then
+			name = "Instance"
+		end
+	
+		if type(total) == "number" and total > 1 then
+			local safeOrdinal = type(ordinal) == "number" and math.max(1, math.floor(ordinal)) or 1
+			if safeOrdinal > 1 then
+				return string.format("%s_%d", name, safeOrdinal)
+			end
+		end
+	
+		return name
+	end
+	
+	function PathUtil.parsePathSegment(segment)
+		if type(segment) ~= "string" or segment == "" then
+			return "Instance", nil
+		end
+	
+		local legacyMarker = ".__rosync_"
+		local legacyMarkerStart = string.find(segment, legacyMarker, 1, true)
+		if legacyMarkerStart ~= nil then
+			local baseName = string.sub(segment, 1, legacyMarkerStart - 1)
+			local ordinalText = string.sub(segment, legacyMarkerStart + string.len(legacyMarker))
+			local ordinal = tonumber(ordinalText)
+			if baseName ~= "" and ordinal ~= nil and ordinal >= 1 then
+				return baseName, ordinal
+			end
+		end
+	
+		local baseName, ordinalText = string.match(segment, "^(.*)_(%d+)$")
+		local ordinal = tonumber(ordinalText)
+		if baseName ~= nil and baseName ~= "" and ordinal ~= nil and ordinal >= 2 then
+			return baseName, ordinal
+		end
+	
+		return segment, nil
+	end
+	
+	function PathUtil.getInstanceSegment(instance)
+		if instance == nil then
+			return "Instance"
+		end
+	
+		local ordinal, total = getSiblingOccurrence(instance)
+		return PathUtil.encodePathSegment(instance.Name, ordinal, total)
+	end
+	
 	function PathUtil.getInstancePath(instance)
 		local segments = {}
 		local current = instance
 	
 		while current and current ~= game do
-			table.insert(segments, 1, current.Name)
+			table.insert(segments, 1, PathUtil.getInstanceSegment(current))
 			current = current.Parent
 		end
 	

@@ -6,7 +6,7 @@ import test from "node:test";
 import { DEFAULT_IGNORE_FILE } from "../src/config/ignore.js";
 import { loadIgnoreRules } from "../src/config/ignore.js";
 import { loadConfig, renderDefaultConfig } from "../src/config/toml_parser.js";
-import { buildProjectTree, createNode, deleteNode, findNodeByPath, renameNode, summarizeProjectTree, updateNode } from "../src/sync/project.js";
+import { buildProjectTree, createNode, deleteNode, findNodeByPath, renameNode, summarizeProjectTree, updateNode, writeInstanceToDisk } from "../src/sync/project.js";
 
 async function createTempProject(): Promise<string> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "rosync-project-"));
@@ -68,4 +68,42 @@ test("create, rename, and delete mutate the project tree", async () => {
 
   tree = await buildProjectTree(config, ignoreRules);
   assert.equal(findNodeByPath(tree, "Workspace/Geometry"), null);
+});
+
+test("buildProjectTree preserves duplicate sibling names with distinct internal paths", async () => {
+  const projectDir = await createTempProject();
+  const config = await loadConfig(projectDir);
+  const ignoreRules = await loadIgnoreRules(projectDir);
+
+  await writeInstanceToDisk(config, "Workspace/Coin", {
+    name: "Coin",
+    className: "Folder",
+    properties: {
+      Archivable: {
+        type: "bool",
+        value: true,
+      },
+    },
+  });
+  await writeInstanceToDisk(config, "Workspace/Coin_2", {
+    name: "Coin",
+    className: "Folder",
+    properties: {
+      Archivable: {
+        type: "bool",
+        value: false,
+      },
+    },
+  });
+
+  const tree = await buildProjectTree(config, ignoreRules);
+  const firstNode = findNodeByPath(tree, "Workspace/Coin");
+  const secondNode = findNodeByPath(tree, "Workspace/Coin_2");
+
+  assert.ok(firstNode);
+  assert.ok(secondNode);
+  assert.equal(firstNode.name, "Coin");
+  assert.equal(secondNode.name, "Coin");
+  assert.notDeepEqual(firstNode.properties, secondNode.properties);
+  assert.equal(tree.services[0]?.children.length, 2);
 });

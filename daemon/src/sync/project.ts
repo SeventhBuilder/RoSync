@@ -18,6 +18,74 @@ function normalizeProjectPath(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
+function pathTail(nodePath: string): string {
+  const normalizedPath = normalizeProjectPath(nodePath);
+  const segments = normalizedPath.split("/");
+  return segments[segments.length - 1] ?? normalizedPath;
+}
+
+function parsePathSegment(segment: string): { name: string; ordinal: number | null } {
+  const legacyMatch = /^(.*)\.__rosync_(\d+)$/.exec(segment);
+  if (legacyMatch) {
+    const ordinal = Number.parseInt(legacyMatch[2] ?? "", 10);
+    return {
+      name: legacyMatch[1] ?? segment,
+      ordinal: Number.isFinite(ordinal) && ordinal >= 1 ? ordinal : null,
+    };
+  }
+
+  const match = /^(.*)_(\d+)$/.exec(segment);
+  if (!match) {
+    return {
+      name: segment,
+      ordinal: null,
+    };
+  }
+
+  const ordinal = Number.parseInt(match[2] ?? "", 10);
+  return {
+    name: match[1] ?? segment,
+    ordinal: Number.isFinite(ordinal) && ordinal >= 2 ? ordinal : null,
+  };
+}
+
+function encodePathSegment(name: string, ordinal: number, total: number): string {
+  if (total > 1 && ordinal > 1) {
+    return `${name}_${ordinal}`;
+  }
+  return name;
+}
+
+function inferNodeName(segment: string, metadata: InstanceMetadata | null): string {
+  if (typeof metadata?.name === "string" && metadata.name.trim() !== "") {
+    return metadata.name;
+  }
+
+  return parsePathSegment(segment).name;
+}
+
+function resolveChildPathSegments(children: SerializableNode[]): Array<SerializableNode & { _pathSegment: string; name: string }> {
+  const totals = new Map<string, number>();
+  const seen = new Map<string, number>();
+
+  for (const child of children) {
+    const childName = (child.name ?? "Instance").trim() || "Instance";
+    totals.set(childName, (totals.get(childName) ?? 0) + 1);
+  }
+
+  return children.map((child) => {
+    const childName = (child.name ?? "Instance").trim() || "Instance";
+    const currentOrdinal = (seen.get(childName) ?? 0) + 1;
+    seen.set(childName, currentOrdinal);
+
+    return {
+      ...child,
+      name: childName,
+      _pathSegment: child._pathSegment ?? encodePathSegment(childName, currentOrdinal, totals.get(childName) ?? 1),
+    };
+  });
+}
+
 function sortNodes(nodes: ProjectTreeNode[]): ProjectTreeNode[] {
   return [...nodes].sort((left, right) => {
     const leftContainer = left.children.length > 0 ? 0 : 1;
@@ -68,6 +136,7 @@ function orderRecordKeys(record: Record<string, unknown>, preferredOrder?: strin
 
 function writeInstanceJson(metadata: InstanceMetadata, propertyOrder?: string[]): string {
   const ordered: Record<string, unknown> = {
+    name: metadata.name,
     className: metadata.className,
     properties: orderRecordKeys(metadata.properties ?? {}, propertyOrder),
     attributes: orderRecordKeys(metadata.attributes ?? {}),
@@ -141,7 +210,8 @@ async function readDirectoryNode(
   }
 
   const metadata = await readInstanceMetadata(metadataPath);
-  const name = path.basename(directoryPath);
+  const directorySegment = path.basename(directoryPath);
+  const name = inferNodeName(directorySegment, metadata);
   if (!parentPath && !ALLOWED_ROOT_SERVICES.has(name)) {
     counters.ignoredEntries += 1;
     return null;
@@ -153,7 +223,7 @@ async function readDirectoryNode(
     return null;
   }
 
-  const nodePath = parentPath ? `${parentPath}/${name}` : name;
+  const nodePath = parentPath ? `${parentPath}/${directorySegment}` : directorySegment;
   const children: ProjectTreeNode[] = [];
 
   const entries = await fs.readdir(directoryPath, { withFileTypes: true });
@@ -316,6 +386,7 @@ export function resolveNodePath(config: ResolvedRoSyncConfig, nodePath: string):
 
 function buildInstanceMetadata(payload: SerializableNode): InstanceMetadata {
   return {
+    name: payload.name,
     className: payload.className,
     properties: payload.properties ?? {},
     attributes: payload.attributes ?? {},
@@ -334,8 +405,12 @@ async function removeKnownScriptFiles(targetDirectory: string): Promise<void> {
 }
 
 async function writeNodeDirectory(targetDirectory: string, payload: SerializableNode, fallbackName: string): Promise<void> {
-  const resolvedName = payload.name ?? fallbackName;
-  const metadata = buildInstanceMetadata(payload);
+  const targetSegment = path.basename(targetDirectory);
+  const resolvedName = payload.name ?? parsePathSegment(targetSegment).name ?? fallbackName;
+  const metadata = buildInstanceMetadata({
+    ...payload,
+    name: resolvedName,
+  });
   const descriptor = scriptDescriptorForClass(payload.className);
 
   await fs.mkdir(targetDirectory, { recursive: true });
@@ -354,17 +429,15 @@ async function writeNodeDirectory(targetDirectory: string, payload: Serializable
     await fs.rm(path.join(targetDirectory, entry.name), { recursive: true, force: true });
   }
 
-  for (const child of payload.children ?? []) {
-    const childName = child.name ?? "Instance";
-    await writeNodeDirectory(path.join(targetDirectory, childName), child, childName);
+  for (const child of resolveChildPathSegments(payload.children ?? [])) {
+    await writeNodeDirectory(path.join(targetDirectory, child._pathSegment), child, child.name);
   }
-
-  void resolvedName;
 }
 
 export async function writeInstanceToDisk(config: ResolvedRoSyncConfig, nodePath: string, payload: SerializableNode): Promise<void> {
   const targetDirectory = resolveNodePath(config, nodePath);
-  const targetName = path.basename(targetDirectory);
+  const targetSegment = pathTail(nodePath);
+  const targetName = parsePathSegment(targetSegment).name;
   const normalizedPayload = { ...payload, name: payload.name ?? targetName };
   const metadataPath = path.join(targetDirectory, INSTANCE_FILE);
   const existingMetadata = await readInstanceMetadata(metadataPath);
@@ -373,6 +446,7 @@ export async function writeInstanceToDisk(config: ResolvedRoSyncConfig, nodePath
       ? payload.children.map((child) => child.name ?? "Instance")
       : existingMetadata?.children ?? [];
   const metadata: InstanceMetadata = {
+    name: normalizedPayload.name,
     className: normalizedPayload.className,
     properties: normalizedPayload.properties ?? {},
     attributes: normalizedPayload.attributes ?? {},
@@ -388,17 +462,16 @@ export async function writeInstanceToDisk(config: ResolvedRoSyncConfig, nodePath
     await fs.writeFile(path.join(targetDirectory, descriptor.fileName), normalizedPayload.source, "utf8");
   }
 
-  for (const child of normalizedPayload.children ?? []) {
-    const childName = child.name ?? "Instance";
-    await writeInstanceToDisk(config, `${nodePath}/${childName}`, { ...child, name: childName });
+  for (const child of resolveChildPathSegments(normalizedPayload.children ?? [])) {
+    await writeInstanceToDisk(config, `${nodePath}/${child._pathSegment}`, { ...child, name: child.name });
   }
 }
 
 export async function upsertNodeFromPayload(config: ResolvedRoSyncConfig, nodePath: string, payload: SerializableNode): Promise<void> {
   const targetDirectory = resolveNodePath(config, nodePath);
-  const targetName = path.basename(targetDirectory);
+  const targetName = parsePathSegment(path.basename(targetDirectory)).name;
   await fs.rm(targetDirectory, { recursive: true, force: true });
-  await writeNodeDirectory(targetDirectory, { ...payload, name: targetName }, targetName);
+  await writeNodeDirectory(targetDirectory, { ...payload, name: payload.name ?? targetName }, targetName);
 }
 
 export async function createNode(
@@ -442,6 +515,7 @@ export async function updateNode(
   const targetDirectory = resolveNodePath(config, nodePath);
   const metadataPath = path.join(targetDirectory, INSTANCE_FILE);
   const metadata = (await readInstanceMetadata(metadataPath)) ?? {
+    name: parsePathSegment(path.basename(targetDirectory)).name,
     className: path.basename(targetDirectory),
     properties: {},
     attributes: {},
@@ -450,6 +524,7 @@ export async function updateNode(
   };
 
   const nextMetadata: InstanceMetadata = {
+    name: metadata.name ?? parsePathSegment(path.basename(targetDirectory)).name,
     className: metadata.className,
     properties: patch.properties ?? metadata.properties ?? {},
     attributes: patch.attributes ?? metadata.attributes ?? {},
