@@ -26,6 +26,9 @@ const logger: ServerLogger = {
   info(message) {
     console.log(`[RoSync] ${message}`);
   },
+  debug(message) {
+    console.debug(`[RoSync] ${message}`);
+  },
   warn(message) {
     console.warn(`[RoSync] ${message}`);
   },
@@ -67,6 +70,7 @@ export function registerWatchCommand(program: Command): void {
         rebuildProjectTree,
         createProjectNode: (parentPath, name, className) => createProjectNodeOnDisk(config, parentPath, name, className),
         updateProjectNode: (nodePath, patch) => updateProjectNodeOnDisk(config, nodePath, patch),
+        syncProjectNode: (nodePath, payload) => writeInstanceToDiskOnDisk(config, nodePath, payload),
         upsertProjectNode: (nodePath, payload) => upsertProjectNodeOnDisk(config, nodePath, payload),
         renameProjectNode: (nodePath, newName) => renameProjectNodeOnDisk(config, nodePath, newName),
         moveProjectNode: (oldPath, newPath) => moveProjectNodeOnDisk(config, oldPath, newPath),
@@ -129,6 +133,11 @@ export function registerWatchCommand(program: Command): void {
           await engine.updateNode(nodePath, patch, "editor");
           await persistRuntimeState();
         },
+        syncProjectNode: async (nodePath, payload) => {
+          await writeInstanceToDiskOnDisk(config, nodePath, payload);
+          await engine.reconcileDiskTree("studio");
+          await persistRuntimeState();
+        },
         upsertProjectNode: async (nodePath, payload) => {
           await engine.upsertNode(nodePath, payload, "editor");
           await persistRuntimeState();
@@ -150,11 +159,7 @@ export function registerWatchCommand(program: Command): void {
           await persistRuntimeState();
         },
         pushBatchFromStudio: async (instances) => {
-          for (const entry of instances) {
-            engine.noteStudioEvent(entry.path);
-            await writeInstanceToDiskOnDisk(config, entry.path, entry.data);
-          }
-          await engine.reconcileDiskTree("studio");
+          await engine.handleStudioPushBatch(instances);
           await persistRuntimeState();
         },
         removeFromStudio: async (nodePath) => {
@@ -203,6 +208,11 @@ export function registerWatchCommand(program: Command): void {
             await engine.updateNode(nodePath, patch, "editor");
             await persistRuntimeState();
           },
+          syncProjectNode: async (nodePath, payload) => {
+            await writeInstanceToDiskOnDisk(config, nodePath, payload);
+            await engine.reconcileDiskTree("studio");
+            await persistRuntimeState();
+          },
           upsertProjectNode: async (nodePath, payload) => {
             await engine.upsertNode(nodePath, payload, "editor");
             await persistRuntimeState();
@@ -224,11 +234,7 @@ export function registerWatchCommand(program: Command): void {
             await persistRuntimeState();
           },
           pushBatchFromStudio: async (instances) => {
-            for (const entry of instances) {
-              engine.noteStudioEvent(entry.path);
-              await writeInstanceToDiskOnDisk(config, entry.path, entry.data);
-            }
-            await engine.reconcileDiskTree("studio");
+            await engine.handleStudioPushBatch(instances);
             await persistRuntimeState();
           },
           removeFromStudio: async (nodePath) => {

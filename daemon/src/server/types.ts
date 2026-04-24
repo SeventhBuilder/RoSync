@@ -14,6 +14,7 @@ import type { SyncActivityAction } from "../sync/engine.js";
 
 export interface ServerLogger {
   info(message: string): void;
+  debug(message: string): void;
   warn(message: string): void;
   error(message: string): void;
 }
@@ -36,6 +37,7 @@ export interface WatchServerContext {
     nodePath: string,
     patch: Partial<Pick<SerializableNode, "properties" | "attributes" | "tags" | "source">>,
   ): Promise<void>;
+  syncProjectNode(nodePath: string, payload: SerializableNode): Promise<void>;
   upsertProjectNode(nodePath: string, payload: SerializableNode): Promise<void>;
   renameProjectNode(nodePath: string, newName: string): Promise<void>;
   moveProjectNode(oldPath: string, newPath: string): Promise<void>;

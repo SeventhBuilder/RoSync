@@ -130,6 +130,7 @@ test("SyncEngine suppresses matching studio echoes", async () => {
     rebuildProjectTree: async () => rebuiltTree,
     createProjectNode: async () => undefined,
     updateProjectNode: async () => undefined,
+    syncProjectNode: async () => undefined,
     upsertProjectNode: async () => {
       upsertCallCount += 1;
     },
@@ -144,6 +145,7 @@ test("SyncEngine suppresses matching studio echoes", async () => {
     },
     logger: {
       info() {},
+      debug() {},
       warn() {},
       error() {},
     },
@@ -182,6 +184,7 @@ test("SyncEngine records a conflict when Studio diverges from pending local stat
     rebuildProjectTree: async () => rebuiltTree,
     createProjectNode: async () => undefined,
     updateProjectNode: async () => undefined,
+    syncProjectNode: async (_nodePath: string, _payload: SerializableNode) => undefined,
     upsertProjectNode: async (_nodePath: string, _payload: SerializableNode) => undefined,
     renameProjectNode: async () => undefined,
     moveProjectNode: async () => undefined,
@@ -194,6 +197,7 @@ test("SyncEngine records a conflict when Studio diverges from pending local stat
     },
     logger: {
       info() {},
+      debug() {},
       warn() {},
       error() {},
     },
@@ -236,6 +240,7 @@ test("SyncEngine applies editor activity hints to disk-origin updates", async ()
     rebuildProjectTree: async () => rebuiltTree,
     createProjectNode: async () => undefined,
     updateProjectNode: async () => undefined,
+    syncProjectNode: async (_nodePath: string, _payload: SerializableNode) => undefined,
     upsertProjectNode: async (_nodePath: string, _payload: SerializableNode) => undefined,
     renameProjectNode: async () => undefined,
     moveProjectNode: async () => undefined,
@@ -245,6 +250,7 @@ test("SyncEngine applies editor activity hints to disk-origin updates", async ()
       info(message) {
         logLines.push(message.replace(/\u001b\[[0-9;]*m/g, ""));
       },
+      debug() {},
       warn() {},
       error() {},
     },
@@ -259,4 +265,65 @@ test("SyncEngine applies editor activity hints to disk-origin updates", async ()
   await engine.reconcileDiskTree("disk");
 
   assert.ok(logLines.includes("[VSCode] ~ Update Workspace/Baseplate"));
+});
+
+test("SyncEngine handles Push All batches additively and continues after write errors", async () => {
+  const initialTree = makeTree([]);
+  const rebuiltTree = makeTree([makeNode("Workspace/Baseplate", "Part")]);
+
+  const syncedPaths: string[] = [];
+  const debugLines: string[] = [];
+  let upsertCallCount = 0;
+  let deleteCallCount = 0;
+
+  const engine = new SyncEngine(initialTree, {
+    rebuildProjectTree: async () => rebuiltTree,
+    createProjectNode: async () => undefined,
+    updateProjectNode: async () => undefined,
+    syncProjectNode: async (nodePath: string) => {
+      syncedPaths.push(nodePath);
+      if (nodePath === "Workspace/Broken") {
+        throw new Error("EPERM");
+      }
+    },
+    upsertProjectNode: async () => {
+      upsertCallCount += 1;
+    },
+    renameProjectNode: async () => undefined,
+    moveProjectNode: async () => undefined,
+    deleteProjectNode: async () => {
+      deleteCallCount += 1;
+    },
+    broadcastToClients: () => 0,
+    logger: {
+      info() {},
+      debug(message) {
+        debugLines.push(message);
+      },
+      warn() {},
+      error() {},
+    },
+  });
+
+  await engine.handleStudioPushBatch([
+    {
+      path: "Workspace/Baseplate",
+      data: projectNodeToSerializable(findChildNode(rebuiltTree, "Workspace/Baseplate")),
+    },
+    {
+      path: "Workspace/Broken",
+      data: {
+        name: "Broken",
+        className: "Part",
+        properties: {},
+        attributes: {},
+        tags: [],
+      },
+    },
+  ]);
+
+  assert.deepEqual(syncedPaths, ["Workspace/Baseplate", "Workspace/Broken"]);
+  assert.equal(upsertCallCount, 0);
+  assert.equal(deleteCallCount, 0);
+  assert.ok(debugLines.some((line) => line.includes("Workspace/Broken") && line.includes("EPERM")));
 });

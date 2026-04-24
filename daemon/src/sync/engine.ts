@@ -87,6 +87,7 @@ export interface SyncEngineHooks {
     nodePath: string,
     patch: Partial<Pick<SerializableNode, "properties" | "attributes" | "tags" | "source">>,
   ): Promise<void>;
+  syncProjectNode(nodePath: string, payload: SerializableNode): Promise<void>;
   upsertProjectNode(nodePath: string, payload: SerializableNode): Promise<void>;
   renameProjectNode(nodePath: string, newName: string): Promise<void>;
   moveProjectNode(oldPath: string, newPath: string): Promise<void>;
@@ -94,6 +95,7 @@ export interface SyncEngineHooks {
   broadcastToClients(role: "studio" | "editor" | "unknown", payload: unknown): number;
   logger: {
     info(message: string): void;
+    debug(message: string): void;
     warn(message: string): void;
     error(message: string): void;
   };
@@ -127,8 +129,11 @@ function hashText(text: string): string {
 }
 
 export function projectNodeToSerializable(node: ProjectTreeNode): SerializableNode {
+  const pathSegments = node.path.split("/");
+  const pathSegment = pathSegments[pathSegments.length - 1] ?? node.name;
   return {
     name: node.name,
+    _pathSegment: pathSegment,
     className: node.className,
     properties: { ...node.properties },
     attributes: { ...node.attributes },
@@ -606,8 +611,37 @@ export class SyncEngine {
       return;
     }
 
-    await this.hooks.upsertProjectNode(pathValue, data);
+    await this.hooks.syncProjectNode(pathValue, data);
     await this.reconcileDiskTree("studio");
+  }
+
+  public async handleStudioPushBatch(instances: Array<{ path: string; data: SerializableNode }>): Promise<void> {
+    let wroteAnyInstance = false;
+
+    for (const entry of instances) {
+      this.noteStudioEvent(entry.path);
+
+      try {
+        await this.hooks.syncProjectNode(entry.path, entry.data);
+        wroteAnyInstance = true;
+      } catch (error) {
+        this.hooks.logger.debug(
+          `Push All write skipped for ${entry.path}: ${String((error as Error).message ?? error)}`,
+        );
+      }
+    }
+
+    if (!wroteAnyInstance) {
+      return;
+    }
+
+    try {
+      await this.reconcileDiskTree("studio");
+    } catch (error) {
+      this.hooks.logger.debug(
+        `Push All reconcile skipped after filesystem error: ${String((error as Error).message ?? error)}`,
+      );
+    }
   }
 
   public async handleStudioRemove(pathValue: string): Promise<void> {
