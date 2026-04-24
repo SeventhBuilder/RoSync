@@ -28,9 +28,14 @@ local PROPERTY_DENYLIST = {
 	numExpectedDirectChildren = true,
 	Children = true,
 }
+local PROPERTY_DENYLIST_LOWER = {}
 
 local propertyCache = {}
 local readOnlyPropertyCache = {}
+
+for propertyName in pairs(PROPERTY_DENYLIST) do
+	PROPERTY_DENYLIST_LOWER[string.lower(propertyName)] = true
+end
 
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +57,14 @@ local function safeReadStringProperty(instance, propertyName, fallback)
 		return value
 	end
 	return fallback
+end
+
+local function isDeniedPropertyName(propertyName)
+	if type(propertyName) ~= "string" or propertyName == "" then
+		return true
+	end
+
+	return PROPERTY_DENYLIST[propertyName] == true or PROPERTY_DENYLIST_LOWER[string.lower(propertyName)] == true
 end
 
 -- ── Property name discovery via ReflectionService ────────────────────────────
@@ -80,7 +93,7 @@ local function getPropertyNamesForClass(className)
 	local readOnlyNames = {}
 	for _, prop in ipairs(props) do
 		local name = prop.Name
-		if type(name) == "string" and not PROPERTY_DENYLIST[name] then
+		if type(name) == "string" and not isDeniedPropertyName(name) then
 			local canWrite = prop.Permits == nil
 				or prop.Permits.Write ~= nil
 				or prop.Permits.WriteParallel ~= nil
@@ -103,7 +116,7 @@ local function getPropertyNamesForClass(className)
 
 		for _, prop in ipairs(props) do
 			local name = prop.Name
-			if type(name) == "string" and not PROPERTY_DENYLIST[name] then
+			if type(name) == "string" and not isDeniedPropertyName(name) then
 				local lowercaseName = string.lower(name)
 				if not seenLowercaseNames[lowercaseName] then
 					seenLowercaseNames[lowercaseName] = true
@@ -283,6 +296,10 @@ function Serializer.serializeInstance(instance, deep)
 
 	local readOnlyNames = readOnlyPropertyCache[className] or {}
 	for _, propertyName in ipairs(sortedPropertyNamesForClass(className)) do
+		if isDeniedPropertyName(propertyName) then
+			continue
+		end
+
 		local success, propertyValue = safeReadProperty(instance, propertyName)
 		if success then
 			local encodedValue = encodeValue(propertyValue)
