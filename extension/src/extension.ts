@@ -149,13 +149,22 @@ function statusBarTextForState(state: ConnectionState): string {
   }
 }
 
-export function activate(context: vscode.ExtensionContext): void {
-  const output = vscode.window.createOutputChannel("RoSync");
-  context.subscriptions.push(output);
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const log = vscode.window.createOutputChannel("RoSync");
+  log.appendLine("RoSync activating...");
+  context.subscriptions.push(log);
 
   try {
     const daemonClient = new DaemonClient();
     const explorerProvider = new ExplorerProvider(daemonClient);
+
+    context.subscriptions.push(
+      daemonClient,
+      explorerProvider,
+      vscode.window.registerTreeDataProvider("rosync.explorer", explorerProvider),
+    );
+    log.appendLine("Explorer provider registered.");
+
     const propertiesProvider = new PropertiesProvider(daemonClient);
     const statusProvider = new StatusProvider(daemonClient);
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -168,8 +177,6 @@ export function activate(context: vscode.ExtensionContext): void {
     });
 
     context.subscriptions.push(
-      daemonClient,
-      explorerProvider,
       statusProvider,
       propertiesProvider,
       statusBarItem,
@@ -206,9 +213,6 @@ export function activate(context: vscode.ExtensionContext): void {
           path: nodePath,
         });
       }),
-    );
-
-    context.subscriptions.push(
       vscode.window.createTreeView("rosync.git", {
         treeDataProvider: {
           getTreeItem: (item: vscode.TreeItem) => item,
@@ -244,22 +248,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
     void daemonClient.start().catch((error) => {
       const message = String((error as Error).message ?? error);
-      output.appendLine(`RoSync daemon connection failed: ${message}`);
+      log.appendLine(`RoSync daemon connection failed: ${message}`);
       if (error instanceof Error && error.stack) {
-        output.appendLine(error.stack);
+        log.appendLine(error.stack);
       }
       void vscode.window.showWarningMessage(`RoSync daemon connection failed: ${message}`);
     });
     void explorerProvider.refresh();
     void statusProvider.refresh();
+    log.appendLine("RoSync activated successfully.");
   } catch (error) {
     const message = String((error as Error).message ?? error);
-    output.appendLine(`Activation failed: ${message}`);
+    log.appendLine(`RoSync activation FAILED: ${message}`);
     if (error instanceof Error && error.stack) {
-      output.appendLine(error.stack);
+      log.appendLine(error.stack);
     }
-    output.show(true);
-    void vscode.window.showErrorMessage(`RoSync activation failed: ${message}`);
+    log.show(true);
+    void vscode.window.showErrorMessage("RoSync failed to activate. Check Output > RoSync for details.");
   }
 }
 
