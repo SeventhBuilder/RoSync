@@ -136,10 +136,10 @@ export function attachWebSocketServer(
         return;
       }
 
-      try {
-        const type = typeof payload.type === "string" ? payload.type : "UNKNOWN";
+      const messageType = typeof payload.type === "string" ? payload.type : "UNKNOWN";
 
-        switch (type) {
+      try {
+        switch (messageType) {
           case "HELLO": {
             session.role =
               payload.client === "studio"
@@ -265,7 +265,7 @@ export function attachWebSocketServer(
               safeSend(socket, {
                 type: "ERROR",
                 code: "INVALID_INSTANCE_PAYLOAD",
-                message: `Expected path and data for ${type}.`,
+                message: `Expected path and data for ${messageType}.`,
               });
               break;
             }
@@ -273,7 +273,7 @@ export function attachWebSocketServer(
             await context.syncFromStudio(nodePath, data as never);
             safeSend(socket, {
               type: "ACK",
-              message: `${type} applied.`,
+              message: `${messageType} applied.`,
               path: nodePath,
             });
             break;
@@ -293,7 +293,7 @@ export function attachWebSocketServer(
             await context.removeFromStudio(nodePath);
             safeSend(socket, {
               type: "ACK",
-              message: `${type} applied.`,
+              message: `${messageType} applied.`,
               path: nodePath,
             });
             break;
@@ -314,7 +314,7 @@ export function attachWebSocketServer(
             await context.renameFromStudio(oldPath, newPath);
             safeSend(socket, {
               type: "ACK",
-              message: `${type} applied.`,
+              message: `${messageType} applied.`,
               oldPath,
               newPath,
             });
@@ -377,15 +377,11 @@ export function attachWebSocketServer(
             break;
           }
           default:
-            safeSend(socket, {
-              type: "ERROR",
-              code: "UNKNOWN_MESSAGE",
-              message: `Unsupported message type ${String(type)}.`,
-            });
+            context.logger.debug(`Unhandled message type: ${messageType}`);
             break;
         }
       } catch (error) {
-        context.logger.error(`WebSocket message error: ${String((error as Error).message ?? error)}`);
+        context.logger.error(`WebSocket message error for ${messageType}: ${String((error as Error).message ?? error)}`);
         safeSend(socket, {
           type: "ERROR",
           code: "MALFORMED_MESSAGE",
