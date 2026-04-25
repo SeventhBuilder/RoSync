@@ -15,6 +15,8 @@
     "onView:rosync.explorer",
     "onView:rosync.properties",
     "onView:rosync.status",
+    "onView:rosync.plan",
+    "onView:rosync.conflicts",
     "onView:rosync.git",
     "onView:rosync.agent"
   ],
@@ -58,6 +60,14 @@
           "name": "Sync Status"
         },
         {
+          "id": "rosync.plan",
+          "name": "Sync Plan"
+        },
+        {
+          "id": "rosync.conflicts",
+          "name": "Conflicts"
+        },
+        {
           "id": "rosync.git",
           "name": "Git History"
         },
@@ -91,6 +101,26 @@
       {
         "command": "rosync.deleteNode",
         "title": "Delete Instance"
+      },
+      {
+        "command": "rosync.refreshConflicts",
+        "title": "Refresh RoSync Conflicts"
+      },
+      {
+        "command": "rosync.clearSyncPlan",
+        "title": "Clear Sync Plan"
+      },
+      {
+        "command": "rosync.resolveConflictOurs",
+        "title": "Keep Disk Version"
+      },
+      {
+        "command": "rosync.resolveConflictTheirs",
+        "title": "Keep Studio Version"
+      },
+      {
+        "command": "rosync.dismissConflict",
+        "title": "Dismiss Conflict"
       }
     ],
     "menus": {
@@ -104,6 +134,16 @@
           "command": "rosync.createInstance",
           "when": "view == rosync.explorer",
           "group": "navigation@1"
+        },
+        {
+          "command": "rosync.refreshConflicts",
+          "when": "view == rosync.conflicts",
+          "group": "navigation"
+        },
+        {
+          "command": "rosync.clearSyncPlan",
+          "when": "view == rosync.plan",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -131,6 +171,21 @@
           "command": "rosync.deleteNode",
           "when": "view == rosync.explorer",
           "group": "navigation@2"
+        },
+        {
+          "command": "rosync.resolveConflictOurs",
+          "when": "view == rosync.conflicts && viewItem == rosyncConflict.item",
+          "group": "inline"
+        },
+        {
+          "command": "rosync.resolveConflictTheirs",
+          "when": "view == rosync.conflicts && viewItem == rosyncConflict.item",
+          "group": "inline@1"
+        },
+        {
+          "command": "rosync.dismissConflict",
+          "when": "view == rosync.conflicts && viewItem == rosyncConflict.item",
+          "group": "navigation"
         }
       ]
     }

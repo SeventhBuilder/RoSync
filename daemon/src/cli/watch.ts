@@ -1,4 +1,5 @@
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import chokidar from "chokidar";
 import type { Command } from "commander";
 import { loadIgnoreRules } from "../config/ignore.js";
@@ -45,6 +46,7 @@ export function registerWatchCommand(program: Command): void {
     .option("--host <host>", "Override the configured host")
     .option("--verbose", "Enable verbose logging")
     .action(async (options: { port?: string; host?: string; verbose?: boolean }) => {
+      logger.info("Starting RoSync watch daemon...");
       const config = await loadConfig(process.cwd(), {
         sync: {
           host: options.host ?? undefined,
@@ -67,7 +69,11 @@ export function registerWatchCommand(program: Command): void {
       let websocketRuntime: ReturnType<typeof attachWebSocketServer> | null = null;
       let studioPushAllActive = false;
       const rebuildProjectTree = async () => buildProjectTree(config, ignoreRules);
-      const engine = new SyncEngine(await rebuildProjectTree(), {
+      logger.info(`Indexing project tree from ${config.srcDir}...`);
+      const startupScanStartedAt = performance.now();
+      const initialTree = await rebuildProjectTree();
+      const startupScanDurationMs = Math.round(performance.now() - startupScanStartedAt);
+      const engine = new SyncEngine(initialTree, {
         rebuildProjectTree,
         createProjectNode: (parentPath, name, className) => createProjectNodeOnDisk(config, parentPath, name, className),
         updateProjectNode: (nodePath, patch) => updateProjectNodeOnDisk(config, nodePath, patch),
@@ -79,6 +85,10 @@ export function registerWatchCommand(program: Command): void {
         broadcastToClients: (role, payload) => websocketRuntime?.broadcastToRole(role, payload) ?? 0,
         logger,
       });
+      const initialSummary = engine.getProjectSummary();
+      logger.info(
+        `Indexed ${initialSummary.indexedInstances} instances and ${initialSummary.scriptFiles} script files in ${startupScanDurationMs}ms.`,
+      );
 
       let runtimeState: RuntimeState = {
         ...EMPTY_RUNTIME_STATE,
@@ -131,9 +141,83 @@ export function registerWatchCommand(program: Command): void {
 
         if (progress.serviceComplete && total) {
           logger.info(`Pushing to Studio completed for ${progress.service} (${total}/${total}).`);
-        } else if (done !== null && total !== null && done <= 50) {
+        } else if (done === 0 && total !== null) {
           logger.info(`Pushing to Studio started for ${progress.service} (${total} instances).`);
+        } else if (done !== null && total !== null) {
+          logger.info(`Pushing to Studio progress for ${progress.service} (${done}/${total}).`);
         }
+      };
+
+      const reportSyncPlanFromStudio = async (plan: {
+        direction?: "push" | "pull" | null;
+        service?: string | null;
+        added?: number | null;
+        changed?: number | null;
+        removed?: number | null;
+        unchanged?: number | null;
+        scanned?: number | null;
+        serviceIndex?: number | null;
+        serviceCount?: number | null;
+        planComplete?: boolean;
+      }): Promise<void> => {
+        if (!plan.service || !plan.direction) {
+          return;
+        }
+
+        const added = plan.added ?? 0;
+        const changed = plan.changed ?? 0;
+        const removed = plan.removed ?? 0;
+        const unchanged = plan.unchanged ?? 0;
+
+        websocketRuntime?.broadcastToRole("editor", {
+          type: "SYNC_PLAN",
+          direction: plan.direction,
+          service: plan.service,
+          added,
+          changed,
+          removed,
+          unchanged,
+          scanned: plan.scanned ?? 0,
+          serviceIndex: plan.serviceIndex ?? null,
+          serviceCount: plan.serviceCount ?? null,
+          planComplete: plan.planComplete === true,
+        });
+
+        const actionLabel = plan.direction === "push" ? "Pull from Studio plan" : "Push to Studio plan";
+        logger.info(
+          `${actionLabel} for ${plan.service}: ${added} added, ${changed} changed, ${removed} removed, ${unchanged} unchanged.`,
+        );
+      };
+
+      const reportSyncStageFromStudio = async (stage: {
+        direction?: "push" | "pull" | null;
+        phase?: "planning" | "applying" | null;
+        service?: string | null;
+        serviceIndex?: number | null;
+        serviceCount?: number | null;
+        detail?: string | null;
+      }): Promise<void> => {
+        if (!stage.direction || !stage.phase) {
+          return;
+        }
+
+        websocketRuntime?.broadcastToRole("editor", {
+          type: "SYNC_STAGE",
+          direction: stage.direction,
+          phase: stage.phase,
+          service: stage.service ?? null,
+          serviceIndex: stage.serviceIndex ?? null,
+          serviceCount: stage.serviceCount ?? null,
+          detail: stage.detail ?? null,
+        });
+
+        const directionLabel = stage.direction === "push" ? "Pull from Studio" : "Push to Studio";
+        const phaseLabel = stage.phase === "planning" ? "planning" : "applying";
+        const serviceLabel = stage.service
+          ? `${stage.service}${stage.serviceIndex && stage.serviceCount ? ` (${stage.serviceIndex}/${stage.serviceCount})` : ""}`
+          : "all services";
+        const detailText = stage.detail ? ` - ${stage.detail}` : "";
+        logger.info(`${directionLabel} ${phaseLabel}: ${serviceLabel}${detailText}`);
       };
 
       const httpServer = await startHttpServer({
@@ -189,13 +273,13 @@ export function registerWatchCommand(program: Command): void {
           await engine.handleStudioSync(nodePath, payload);
           await persistRuntimeState();
         },
-        pushBatchFromStudio: async (instances, progress) => {
+        pushBatchFromStudio: async (instances, removedPaths, progress) => {
           if (progress?.service) {
             studioPushAllActive = true;
           }
 
           try {
-            await engine.handleStudioPushBatch(instances, progress);
+            await engine.handleStudioPushBatch(instances, removedPaths, progress);
             await persistRuntimeState();
           } catch (error) {
             studioPushAllActive = false;
@@ -207,6 +291,8 @@ export function registerWatchCommand(program: Command): void {
           }
         },
         reportPullProgressFromStudio,
+        reportSyncPlanFromStudio,
+        reportSyncStageFromStudio,
         removeFromStudio: async (nodePath) => {
           await engine.handleStudioRemove(nodePath);
           await persistRuntimeState();
@@ -278,13 +364,13 @@ export function registerWatchCommand(program: Command): void {
             await engine.handleStudioSync(nodePath, payload);
             await persistRuntimeState();
           },
-          pushBatchFromStudio: async (instances, progress) => {
+          pushBatchFromStudio: async (instances, removedPaths, progress) => {
             if (progress?.service) {
               studioPushAllActive = true;
             }
 
             try {
-              await engine.handleStudioPushBatch(instances, progress);
+              await engine.handleStudioPushBatch(instances, removedPaths, progress);
               await persistRuntimeState();
             } catch (error) {
               studioPushAllActive = false;
@@ -296,6 +382,8 @@ export function registerWatchCommand(program: Command): void {
             }
           },
           reportPullProgressFromStudio,
+          reportSyncPlanFromStudio,
+          reportSyncStageFromStudio,
           removeFromStudio: async (nodePath) => {
             await engine.handleStudioRemove(nodePath);
             await persistRuntimeState();
@@ -344,7 +432,8 @@ export function registerWatchCommand(program: Command): void {
       console.log(`RoSync daemon listening on http://${config.sync.host}:${config.sync.port}`);
       console.log(`WebSocket endpoint: ws://${config.sync.host}:${config.sync.port}`);
       console.log(`Watching: ${config.srcDir}`);
-      console.log("Waiting for Studio and editor connections...");
+      console.log("Waiting for Roblox Studio plugin to connect...");
+      console.log("Waiting for VS Code extension to connect...");
 
       await new Promise<void>((resolve, reject) => {
         let shuttingDown = false;

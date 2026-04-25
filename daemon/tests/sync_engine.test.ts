@@ -267,17 +267,21 @@ test("SyncEngine applies editor activity hints to disk-origin updates", async ()
   assert.ok(logLines.includes("[VSCode] ~ Update Workspace/Baseplate"));
 });
 
-test("SyncEngine handles Push All batches additively and continues after write errors", async () => {
-  const initialTree = makeTree([]);
+test("SyncEngine handles Push All batches with removals and continues after write errors", async () => {
+  const initialTree = makeTree([makeNode("Workspace/Stale", "Folder"), makeNode("Workspace/StaleBroken", "Folder")]);
   const rebuiltTree = makeTree([makeNode("Workspace/Baseplate", "Part")]);
 
   const syncedPaths: string[] = [];
+  const deletedPaths: string[] = [];
   const debugLines: string[] = [];
+  let rebuildCallCount = 0;
   let upsertCallCount = 0;
-  let deleteCallCount = 0;
 
   const engine = new SyncEngine(initialTree, {
-    rebuildProjectTree: async () => rebuiltTree,
+    rebuildProjectTree: async () => {
+      rebuildCallCount += 1;
+      return rebuiltTree;
+    },
     createProjectNode: async () => undefined,
     updateProjectNode: async () => undefined,
     syncProjectNode: async (nodePath: string) => {
@@ -291,8 +295,11 @@ test("SyncEngine handles Push All batches additively and continues after write e
     },
     renameProjectNode: async () => undefined,
     moveProjectNode: async () => undefined,
-    deleteProjectNode: async () => {
-      deleteCallCount += 1;
+    deleteProjectNode: async (nodePath: string) => {
+      deletedPaths.push(nodePath);
+      if (nodePath === "Workspace/StaleBroken") {
+        throw new Error("EPERM");
+      }
     },
     broadcastToClients: () => 0,
     logger: {
@@ -320,10 +327,21 @@ test("SyncEngine handles Push All batches additively and continues after write e
         tags: [],
       },
     },
-  ]);
+  ], [
+    "Workspace/Stale",
+    "Workspace/StaleBroken",
+  ], {
+    service: "Workspace",
+    done: 4,
+    total: 4,
+    serviceComplete: true,
+    pushComplete: true,
+  });
 
   assert.deepEqual(syncedPaths, ["Workspace/Baseplate", "Workspace/Broken"]);
+  assert.deepEqual(deletedPaths, ["Workspace/Stale", "Workspace/StaleBroken"]);
+  assert.equal(rebuildCallCount, 1);
   assert.equal(upsertCallCount, 0);
-  assert.equal(deleteCallCount, 0);
   assert.ok(debugLines.some((line) => line.includes("Workspace/Broken") && line.includes("EPERM")));
+  assert.ok(debugLines.some((line) => line.includes("Workspace/StaleBroken") && line.includes("EPERM")));
 });

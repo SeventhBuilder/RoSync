@@ -193,6 +193,51 @@ function Get-ExtensionInstallRoots {
   return $roots
 }
 
+function Copy-ExtensionRuntimeDependencies {
+  param(
+    [pscustomobject]$Manifest,
+    [string]$Destination
+  )
+
+  $dependencyNames = @()
+  if ($Manifest.dependencies) {
+    $dependencyNames = @($Manifest.dependencies.PSObject.Properties.Name)
+  }
+
+  if ($dependencyNames.Length -eq 0) {
+    return
+  }
+
+  $repoNodeModules = Join-Path $repoRoot "node_modules"
+  if (-not (Test-Path -LiteralPath $repoNodeModules)) {
+    throw "Workspace node_modules was not found at $repoNodeModules. Run npm install first."
+  }
+
+  $destinationNodeModules = Join-Path $Destination "node_modules"
+  if (Test-Path -LiteralPath $destinationNodeModules) {
+    Remove-Item -LiteralPath $destinationNodeModules -Recurse -Force
+  }
+  New-Item -ItemType Directory -Force -Path $destinationNodeModules | Out-Null
+
+  foreach ($dependencyName in $dependencyNames) {
+    $dependencyParts = $dependencyName.Split("/")
+    $relativePath = $dependencyParts[0]
+    for ($index = 1; $index -lt $dependencyParts.Count; $index += 1) {
+      $relativePath = Join-Path $relativePath $dependencyParts[$index]
+    }
+
+    $sourcePath = Join-Path $repoNodeModules $relativePath
+    if (-not (Test-Path -LiteralPath $sourcePath)) {
+      throw "Runtime dependency '$dependencyName' was not found at $sourcePath."
+    }
+
+    $destinationPath = Join-Path $destinationNodeModules $relativePath
+    $destinationParent = Split-Path -Path $destinationPath -Parent
+    New-Item -ItemType Directory -Force -Path $destinationParent | Out-Null
+    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Recurse -Force
+  }
+}
+
 function Install-EditorExtension {
   if ($SkipEditorExtension -or $SkipVsCodeExtension) {
     return
@@ -216,6 +261,7 @@ function Install-EditorExtension {
 
     $destination = Join-Path $root $targetFolderName
     Copy-Item -LiteralPath $extensionSourceDir -Destination $destination -Recurse -Force
+    Copy-ExtensionRuntimeDependencies -Manifest $manifest -Destination $destination
     $script:extensionInstallPaths += $destination
   }
 }

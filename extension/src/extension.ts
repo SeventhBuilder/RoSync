@@ -1,7 +1,9 @@
 import path from "node:path";
 import * as vscode from "vscode";
+import { ConflictProvider } from "./conflicts/ConflictProvider.js";
 import { DaemonClient, type ConnectionState, type ProjectTreeNode } from "./daemon/DaemonClient.js";
 import { ExplorerProvider } from "./explorer/ExplorerProvider.js";
+import { PlanProvider } from "./plans/PlanProvider.js";
 import { PropertiesProvider } from "./properties/PropertiesProvider.js";
 import { StatusProvider } from "./status/StatusProvider.js";
 
@@ -136,6 +138,27 @@ async function deleteInstance(daemonClient: DaemonClient, provider: ExplorerProv
   await provider.refresh();
 }
 
+async function resolveConflict(
+  daemonClient: DaemonClient,
+  explorerProvider: ExplorerProvider,
+  statusProvider: StatusProvider,
+  conflictProvider: ConflictProvider,
+  conflictId: string | undefined,
+  strategy: "ours" | "theirs" | "manual",
+): Promise<void> {
+  if (!conflictId) {
+    void vscode.window.showInformationMessage("Select a conflict first.");
+    return;
+  }
+
+  await daemonClient.resolveConflict(conflictId, strategy);
+  await Promise.all([
+    explorerProvider.refresh(),
+    statusProvider.refresh(),
+    conflictProvider.refresh(),
+  ]);
+}
+
 function statusBarTextForState(state: ConnectionState): string {
   switch (state) {
     case "connected":
@@ -174,10 +197,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   try {
     const daemonClient = new DaemonClient();
     const explorerProvider = new ExplorerProvider(daemonClient);
+    const conflictProvider = new ConflictProvider(daemonClient);
+    const planProvider = new PlanProvider(daemonClient);
+
+    const refreshViews = async (): Promise<void> => {
+      await Promise.all([
+        explorerProvider.refresh(),
+        statusProvider.refresh(),
+        conflictProvider.refresh(),
+      ]);
+    };
 
     context.subscriptions.push(
       daemonClient,
       explorerProvider,
+      conflictProvider,
+      planProvider,
       vscode.window.registerTreeDataProvider("rosync.explorer", explorerProvider),
     );
     log.appendLine("Explorer provider registered.");
@@ -204,9 +239,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         },
       }),
       vscode.window.registerTreeDataProvider("rosync.status", statusProvider),
+      vscode.window.registerTreeDataProvider("rosync.plan", planProvider),
+      vscode.window.registerTreeDataProvider("rosync.conflicts", conflictProvider),
       vscode.commands.registerCommand("rosync.refreshExplorer", async () => {
-        await explorerProvider.refresh();
-        await statusProvider.refresh();
+        await refreshViews();
+      }),
+      vscode.commands.registerCommand("rosync.clearSyncPlan", () => {
+        planProvider.clear();
+      }),
+      vscode.commands.registerCommand("rosync.refreshConflicts", async () => {
+        await conflictProvider.refresh();
       }),
       vscode.commands.registerCommand("rosync.openSource", openSource),
       vscode.commands.registerCommand("rosync.copyPath", copyPath),
@@ -218,6 +260,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ),
       vscode.commands.registerCommand("rosync.deleteNode", (node?: ProjectTreeNode) =>
         deleteInstance(daemonClient, explorerProvider, node),
+      ),
+      vscode.commands.registerCommand("rosync.resolveConflictOurs", (item?: { conflict?: { id?: string } }) =>
+        resolveConflict(daemonClient, explorerProvider, statusProvider, conflictProvider, item?.conflict?.id, "ours"),
+      ),
+      vscode.commands.registerCommand("rosync.resolveConflictTheirs", (item?: { conflict?: { id?: string } }) =>
+        resolveConflict(daemonClient, explorerProvider, statusProvider, conflictProvider, item?.conflict?.id, "theirs"),
+      ),
+      vscode.commands.registerCommand("rosync.dismissConflict", (item?: { conflict?: { id?: string } }) =>
+        resolveConflict(daemonClient, explorerProvider, statusProvider, conflictProvider, item?.conflict?.id, "manual"),
       ),
       vscode.workspace.onDidSaveTextDocument((document) => {
         const nodePath = inferRoSyncNodePath(document.uri);
@@ -289,6 +340,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               }
             }
           }
+        } else if (event.type === "SYNC_PLAN") {
+          const directionLabel = event.direction === "push" ? "Push" : "Pull";
+          log.appendLine(
+            `${directionLabel} plan for ${event.service}: ${event.added} added, ${event.changed} changed, ${event.removed} removed, ${event.unchanged} unchanged.`,
+          );
+          if (event.planComplete) {
+            log.appendLine(`${directionLabel} plan ready.`);
+          }
+        } else if (event.type === "SYNC_STAGE") {
+          const directionLabel = event.direction === "push" ? "Pull from Studio" : "Push to Studio";
+          const phaseLabel = event.phase === "planning" ? "planning" : "applying";
+          const serviceLabel = event.service
+            ? `${event.service}${event.serviceIndex !== null && event.serviceCount !== null ? ` (${event.serviceIndex}/${event.serviceCount})` : ""}`
+            : "all services";
+          const detailText = event.detail ? ` - ${event.detail}` : "";
+          log.appendLine(`${directionLabel} ${phaseLabel}: ${serviceLabel}${detailText}`);
         } else if (event.type === "CONFLICT") {
           void vscode.window.showWarningMessage(`RoSync conflict detected at ${event.conflict.path}`);
         } else if (event.type === "ERROR") {
@@ -305,8 +372,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       void vscode.window.showWarningMessage(`RoSync daemon connection failed: ${message}`);
     });
-    void explorerProvider.refresh();
-    void statusProvider.refresh();
+    void refreshViews();
     log.appendLine("RoSync activated successfully.");
   } catch (error) {
     const message = String((error as Error).message ?? error);

@@ -6,6 +6,7 @@ local Deserializer = {}
 
 local READ_ONLY_INSTANCES = {
 	["Workspace/Camera"] = true,
+	["Workspace/Terrain"] = true,
 }
 local LOCKED_SERVICES = {
 	Workspace = true,
@@ -393,8 +394,22 @@ local function joinPath(parentPath, childName)
 	return parentPath .. "/" .. childName
 end
 
+local function isSameOrDescendantPath(candidatePath, ancestorPath)
+	if type(candidatePath) ~= "string" or type(ancestorPath) ~= "string" then
+		return false
+	end
+
+	return candidatePath == ancestorPath or string.sub(candidatePath, 1, #ancestorPath + 1) == ancestorPath .. "/"
+end
+
 local function isReadOnlyPath(pathValue)
-	return READ_ONLY_INSTANCES[pathValue] == true
+	for protectedPath in pairs(READ_ONLY_INSTANCES) do
+		if isSameOrDescendantPath(pathValue, protectedPath) then
+			return true
+		end
+	end
+
+	return false
 end
 
 local function isLockedServiceName(serviceName)
@@ -403,6 +418,41 @@ end
 
 local function isLockedServiceInstance(instance)
 	return instance ~= nil and instance.Parent == game and isLockedServiceName(instance.Name)
+end
+
+local function isRuntimePlayerInstance(instance)
+	local current = instance
+	while current and current ~= game do
+		local success, isPlayer = pcall(function()
+			return current:IsA("Player")
+		end)
+		if success and isPlayer then
+			return true
+		end
+		current = current.Parent
+	end
+
+	return false
+end
+
+local function shouldProtectFromRemoval(instance, pathValue)
+	if instance == nil then
+		return true
+	end
+
+	if isReadOnlyPath(pathValue) then
+		return true
+	end
+
+	if isLockedServiceInstance(instance) then
+		return true
+	end
+
+	if isRuntimePlayerInstance(instance) then
+		return true
+	end
+
+	return false
 end
 
 local function countNodeInstances(node)
@@ -438,6 +488,7 @@ local function createProgressState(options, total)
 	return {
 		done = 0,
 		total = total,
+		removed = 0,
 		batchSize = type(options.batchSize) == "number" and math.max(1, options.batchSize) or 50,
 		onProgress = onProgress,
 		onServiceStart = onServiceStart,
@@ -446,6 +497,7 @@ local function createProgressState(options, total)
 		currentService = nil,
 		currentServiceDone = 0,
 		currentServiceTotal = 0,
+		currentServiceRemoved = 0,
 		currentServiceIsLast = false,
 	}
 end
@@ -458,6 +510,7 @@ local function beginServiceProgress(progressState, serviceName, total, isLastSer
 	progressState.currentService = serviceName
 	progressState.currentServiceDone = 0
 	progressState.currentServiceTotal = total
+	progressState.currentServiceRemoved = 0
 	progressState.currentServiceIsLast = isLastService == true
 
 	if progressState.onServiceStart then
@@ -475,13 +528,15 @@ local function completeServiceProgress(progressState)
 			progressState.currentService,
 			progressState.currentServiceDone,
 			progressState.currentServiceTotal,
-			progressState.currentServiceIsLast == true
+			progressState.currentServiceIsLast == true,
+			progressState.currentServiceRemoved
 		)
 	end
 
 	progressState.currentService = nil
 	progressState.currentServiceDone = 0
 	progressState.currentServiceTotal = 0
+	progressState.currentServiceRemoved = 0
 	progressState.currentServiceIsLast = false
 end
 
@@ -504,6 +559,17 @@ local function markProgress(progressState)
 
 	if progressState.onProgress and (progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total) then
 		progressState.onProgress(progressState.done, progressState.total)
+	end
+end
+
+local function markRemoval(progressState)
+	if progressState == nil then
+		return
+	end
+
+	progressState.removed += 1
+	if progressState.currentService ~= nil then
+		progressState.currentServiceRemoved += 1
 	end
 end
 
@@ -619,8 +685,53 @@ end
 
 local applyNode
 
-local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState)
+local function planDesiredChildren(parentInstance, childNodes)
+	local plannedChildren = {}
+	local matchedInstances = {}
+
 	for _, childNode in ipairs(childNodes or {}) do
+		local childInstance = findCandidateChild(parentInstance, childNode)
+		if childInstance ~= nil and matchedInstances[childInstance] == true then
+			childInstance = nil
+		end
+
+		if childInstance ~= nil then
+			matchedInstances[childInstance] = true
+		end
+
+		table.insert(plannedChildren, {
+			node = childNode,
+			instance = childInstance,
+		})
+	end
+
+	return plannedChildren, matchedInstances
+end
+
+local function reconcileChildren(parentInstance, matchedInstances, progressState)
+	for _, childInstance in ipairs(parentInstance:GetChildren()) do
+		if matchedInstances[childInstance] ~= true then
+			local childPath = PathUtil.getInstancePath(childInstance)
+			if not shouldProtectFromRemoval(childInstance, childPath) then
+				local removed = pcall(function()
+					childInstance:Destroy()
+				end)
+				if removed then
+					markRemoval(progressState)
+				end
+			end
+		end
+	end
+end
+
+local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState, options)
+	local plannedChildren, matchedInstances = planDesiredChildren(parentInstance, childNodes)
+	if type(options) == "table" and options.reconcileRemovals == true then
+		reconcileChildren(parentInstance, matchedInstances, progressState)
+	end
+
+	for _, plannedChild in ipairs(plannedChildren) do
+		local childNode = plannedChild.node
 		local childSegment = childNode._pathSegment or childNode.pathSegment or childNode.name
 		local childPath = joinPath(parentPath, childSegment)
 		if isReadOnlyPath(childPath) then
@@ -628,18 +739,18 @@ local function applyChildrenRecursive(parentInstance, parentPath, childNodes, pr
 			continue
 		end
 
-		local childInstance = findCandidateChild(parentInstance, childNode)
+		local childInstance = plannedChild.instance
 		if not childInstance then
 			childInstance = createInstanceForNode(childNode)
 			childInstance.Name = childNode.name
 			childInstance.Parent = parentInstance
 		end
 
-		applyNode(childInstance, childNode, childPath, progressState)
+		applyNode(childInstance, childNode, childPath, progressState, options)
 	end
 end
 
-applyNode = function(instance, node, nodePath, progressState)
+applyNode = function(instance, node, nodePath, progressState, options)
 	if isReadOnlyPath(nodePath) then
 		markProgress(progressState)
 		return true
@@ -651,7 +762,7 @@ applyNode = function(instance, node, nodePath, progressState)
 	applyTagsAdditive(instance, node.tags)
 	local deferredPrimaryPart = applyProperties(instance, node)
 	markProgress(progressState)
-	applyChildrenRecursive(instance, nodePath, node.children, progressState)
+	applyChildrenRecursive(instance, nodePath, node.children, progressState, options)
 
 	if type(deferredPrimaryPart) == "table" then
 		local referenceValue = deferredPrimaryPart.value or deferredPrimaryPart.Value or deferredPrimaryPart
@@ -667,7 +778,7 @@ applyNode = function(instance, node, nodePath, progressState)
 	end
 end
 
-local function applyServiceNode(serviceNode, progressState)
+local function applyServiceNode(serviceNode, progressState, options)
 	local service = getServiceRoot(serviceNode.name)
 	if not service then
 		return false, "Missing service " .. tostring(serviceNode.name)
@@ -677,7 +788,7 @@ local function applyServiceNode(serviceNode, progressState)
 	applyTagsAdditive(service, serviceNode.tags)
 	applyProperties(service, serviceNode)
 	markProgress(progressState)
-	applyChildrenRecursive(service, serviceNode.name, serviceNode.children, progressState)
+	applyChildrenRecursive(service, serviceNode.name, serviceNode.children, progressState, options)
 
 	return true
 end
@@ -709,9 +820,9 @@ function Deserializer.applySyncInstance(pathValue, node, options)
 			source = node.source,
 			children = node.children or {},
 			_pathSegment = node._pathSegment or segments[1],
-		}, progressState)
+		}, progressState, options)
 		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
-		return success, result, progressState and progressState.done or countNodeInstances(node)
+		return success, result, progressState and progressState.done or countNodeInstances(node), progressState and progressState.removed or 0
 	end
 
 	local parent, parentError = ensureParentForPath(pathValue)
@@ -738,9 +849,9 @@ function Deserializer.applySyncInstance(pathValue, node, options)
 		instance.Parent = parent
 	end
 
-	applyNode(instance, childNode, pathValue, progressState)
+	applyNode(instance, childNode, pathValue, progressState, options)
 	ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
-	return true, nil, progressState and progressState.done or countNodeInstances(childNode)
+	return true, nil, progressState and progressState.done or countNodeInstances(childNode), progressState and progressState.removed or 0
 end
 
 function Deserializer.removeAtPath(pathValue)
@@ -832,7 +943,7 @@ function Deserializer.applyTree(tree, options)
 
 	for index, serviceNode in ipairs(tree.services) do
 		beginServiceProgress(progressState, serviceNode.name, countNodeInstances(serviceNode), index == #tree.services)
-		local success, result = applyServiceNode(serviceNode, progressState)
+		local success, result = applyServiceNode(serviceNode, progressState, options)
 		completeServiceProgress(progressState)
 		if not success then
 			table.insert(errors, tostring(result))
@@ -845,7 +956,7 @@ function Deserializer.applyTree(tree, options)
 		return false, table.concat(errors, "\n")
 	end
 
-	return true, nil, progressState and progressState.done or countTreeInstances(tree)
+	return true, nil, progressState and progressState.done or countTreeInstances(tree), progressState and progressState.removed or 0
 end
 
 return Deserializer

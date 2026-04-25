@@ -59,6 +59,15 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem>, vsco
         } else {
           this.onDidChangeTreeDataEmitter.fire(undefined);
         }
+      } else if (event.type === "SYNC_STAGE") {
+        const directionLabel = event.direction === "push" ? "Pulling from Studio" : "Pushing to Studio";
+        const phaseLabel = event.phase === "planning" ? "Planning" : "Applying";
+        const serviceLabel = event.service
+          ? `${event.service}${event.serviceIndex !== null && event.serviceCount !== null ? ` (${event.serviceIndex}/${event.serviceCount})` : ""}`
+          : "all services";
+        const detailText = event.detail ? `: ${event.detail}` : "";
+        this.activity = `${phaseLabel} ${directionLabel}: ${serviceLabel}${detailText}`;
+        this.onDidChangeTreeDataEmitter.fire(undefined);
       } else if (event.type === "SYNC_INSTANCE" || event.type === "REMOVE_INSTANCE" || event.type === "RENAME_INSTANCE" || event.type === "CONFLICT") {
         if (
           "origin" in event &&

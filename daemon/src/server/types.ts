@@ -45,6 +45,7 @@ export interface WatchServerContext {
   syncFromStudio(nodePath: string, payload: SerializableNode): Promise<void>;
   pushBatchFromStudio(
     instances: Array<{ path: string; data: SerializableNode }>,
+    removedPaths?: string[],
     progress?: {
       service?: string | null;
       done?: number | null;
@@ -59,6 +60,26 @@ export interface WatchServerContext {
     total?: number | null;
     serviceComplete?: boolean;
     pullComplete?: boolean;
+  }): Promise<void>;
+  reportSyncPlanFromStudio(plan: {
+    direction?: "push" | "pull" | null;
+    service?: string | null;
+    added?: number | null;
+    changed?: number | null;
+    removed?: number | null;
+    unchanged?: number | null;
+    scanned?: number | null;
+    serviceIndex?: number | null;
+    serviceCount?: number | null;
+    planComplete?: boolean;
+  }): Promise<void>;
+  reportSyncStageFromStudio(stage: {
+    direction?: "push" | "pull" | null;
+    phase?: "planning" | "applying" | null;
+    service?: string | null;
+    serviceIndex?: number | null;
+    serviceCount?: number | null;
+    detail?: string | null;
   }): Promise<void>;
   removeFromStudio(nodePath: string): Promise<void>;
   renameFromStudio(oldPath: string, newPath: string): Promise<void>;

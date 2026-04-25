@@ -234,9 +234,11 @@ export class ExplorerProvider implements vscode.TreeDataProvider<ExplorerNode>, 
       case "PUSH_PROGRESS":
         this.activeStudioPushService = event.pushComplete ? null : event.service;
         if (event.serviceComplete) {
-          await this.refreshService(event.service);
           if (event.pushComplete) {
             this.activeStudioPushService = null;
+            await this.refresh();
+          } else {
+            await this.refreshService(event.service);
           }
         }
         return;

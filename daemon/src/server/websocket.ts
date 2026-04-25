@@ -15,6 +15,12 @@ interface ClientSession {
   socket: WebSocket;
 }
 
+interface ClientRoleCounts {
+  studio: number;
+  editor: number;
+  unknown: number;
+}
+
 export interface WebSocketRuntime {
   broadcast(payload: unknown, exceptSessionId?: string): void;
   broadcastToRole(role: ClientRole, payload: unknown): number;
@@ -87,6 +93,36 @@ function isSerializableNodePayload(value: unknown): value is SerializableNode {
   return typeof value === "object" && value !== null && typeof (value as { className?: unknown }).className === "string";
 }
 
+function countSessionsByRole(sessions: Map<string, ClientSession>): ClientRoleCounts {
+  const counts: ClientRoleCounts = {
+    studio: 0,
+    editor: 0,
+    unknown: 0,
+  };
+
+  for (const session of sessions.values()) {
+    counts[session.role] += 1;
+  }
+
+  return counts;
+}
+
+function connectionStatusMessage(counts: ClientRoleCounts): string {
+  if (counts.studio > 0 && counts.editor > 0) {
+    return `Roblox Studio plugin and VS Code extension connected. Sync is ready (${counts.studio} Studio, ${counts.editor} editor).`;
+  }
+
+  if (counts.studio > 0) {
+    return `Roblox Studio plugin connected. Waiting for VS Code extension (${counts.studio} Studio, ${counts.editor} editor).`;
+  }
+
+  if (counts.editor > 0) {
+    return `VS Code extension connected. Waiting for Roblox Studio plugin (${counts.studio} Studio, ${counts.editor} editor).`;
+  }
+
+  return "Waiting for Roblox Studio plugin and VS Code extension to connect.";
+}
+
 export function attachWebSocketServer(
   server: http.Server,
   context: WatchServerContext,
@@ -109,7 +145,7 @@ export function attachWebSocketServer(
     };
 
     sessions.set(session.id, session);
-    context.logger.info(`WebSocket client connected; waiting for HELLO (${session.id.slice(0, 8)}).`);
+    context.logger.debug(`WebSocket client connected; waiting for HELLO (${session.id.slice(0, 8)}).`);
     void emitSessionsChanged();
 
     socket.on("message", async (message) => {
@@ -151,6 +187,7 @@ export function attachWebSocketServer(
             context.logger.info(
               `${formatClientRole(session.role)} connected via WebSocket${session.version ? ` (v${session.version})` : ""}.`,
             );
+            context.logger.info(connectionStatusMessage(countSessionsByRole(sessions)));
             const schema = await context.getSchemaCache();
             safeSend(socket, {
               type: "WELCOME",
@@ -213,6 +250,7 @@ export function attachWebSocketServer(
             }
 
             const parsedInstances: Array<{ path: string; data: SerializableNode }> = [];
+            const removedPaths: string[] = [];
             let invalidBatch = false;
             for (const entry of instances) {
               const instancePath =
@@ -232,6 +270,21 @@ export function attachWebSocketServer(
               });
             }
 
+            const rawRemovedPaths = payload.removedPaths;
+            if (!invalidBatch && rawRemovedPaths !== undefined) {
+              if (!Array.isArray(rawRemovedPaths)) {
+                invalidBatch = true;
+              } else {
+                for (const removedPath of rawRemovedPaths) {
+                  if (typeof removedPath !== "string") {
+                    invalidBatch = true;
+                    break;
+                  }
+                  removedPaths.push(removedPath);
+                }
+              }
+            }
+
             if (invalidBatch) {
               safeSend(socket, {
                 type: "ERROR",
@@ -248,20 +301,22 @@ export function attachWebSocketServer(
               serviceComplete: payload.serviceComplete === true,
               pushComplete: payload.pushComplete === true,
             };
-            await context.pushBatchFromStudio(parsedInstances, progress);
+            await context.pushBatchFromStudio(parsedInstances, removedPaths, progress);
             context.broadcastToClients("editor", {
               type: "BATCH_SYNCED",
-              count: parsedInstances.length,
+              count: parsedInstances.length + removedPaths.length,
               service: progress.service,
               done: progress.done,
               total: progress.total,
               serviceComplete: progress.serviceComplete,
               pushComplete: progress.pushComplete,
+              removedCount: removedPaths.length,
             });
             safeSend(socket, {
               type: "ACK",
               message: "PUSH_BATCH applied.",
-              count: parsedInstances.length,
+              count: parsedInstances.length + removedPaths.length,
+              removedCount: removedPaths.length,
             });
             break;
           }
@@ -278,6 +333,73 @@ export function attachWebSocketServer(
               type: "ACK",
               message: "PULL_PROGRESS acknowledged.",
               service: progress.service,
+            });
+            break;
+          }
+          case "SYNC_PLAN": {
+            const direction: "push" | "pull" | null =
+              payload.direction === "push" || payload.direction === "pull" ? payload.direction : null;
+            const plan = {
+              direction,
+              service: typeof payload.service === "string" ? payload.service : null,
+              added: typeof payload.added === "number" ? payload.added : null,
+              changed: typeof payload.changed === "number" ? payload.changed : null,
+              removed: typeof payload.removed === "number" ? payload.removed : null,
+              unchanged: typeof payload.unchanged === "number" ? payload.unchanged : null,
+              scanned: typeof payload.scanned === "number" ? payload.scanned : null,
+              serviceIndex: typeof payload.serviceIndex === "number" ? payload.serviceIndex : null,
+              serviceCount: typeof payload.serviceCount === "number" ? payload.serviceCount : null,
+              planComplete: payload.planComplete === true,
+            };
+
+            if (!plan.direction || !plan.service) {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "INVALID_SYNC_PLAN",
+                message: "Expected direction and service for SYNC_PLAN.",
+              });
+              break;
+            }
+
+            await context.reportSyncPlanFromStudio(plan);
+            safeSend(socket, {
+              type: "ACK",
+              message: "SYNC_PLAN acknowledged.",
+              direction: plan.direction,
+              service: plan.service,
+            });
+            break;
+          }
+          case "SYNC_STAGE": {
+            const direction: "push" | "pull" | null =
+              payload.direction === "push" || payload.direction === "pull" ? payload.direction : null;
+            const phase: "planning" | "applying" | null =
+              payload.phase === "planning" || payload.phase === "applying" ? payload.phase : null;
+            const stage = {
+              direction,
+              phase,
+              service: typeof payload.service === "string" ? payload.service : null,
+              serviceIndex: typeof payload.serviceIndex === "number" ? payload.serviceIndex : null,
+              serviceCount: typeof payload.serviceCount === "number" ? payload.serviceCount : null,
+              detail: typeof payload.detail === "string" ? payload.detail : null,
+            };
+
+            if (!stage.direction || !stage.phase) {
+              safeSend(socket, {
+                type: "ERROR",
+                code: "INVALID_SYNC_STAGE",
+                message: "Expected direction and phase for SYNC_STAGE.",
+              });
+              break;
+            }
+
+            await context.reportSyncStageFromStudio(stage);
+            safeSend(socket, {
+              type: "ACK",
+              message: "SYNC_STAGE acknowledged.",
+              direction: stage.direction,
+              phase: stage.phase,
+              service: stage.service,
             });
             break;
           }
@@ -421,6 +543,7 @@ export function attachWebSocketServer(
     socket.on("close", () => {
       sessions.delete(session.id);
       context.logger.info(`${formatClientRole(session.role)} disconnected from WebSocket.`);
+      context.logger.info(connectionStatusMessage(countSessionsByRole(sessions)));
       void emitSessionsChanged();
     });
 

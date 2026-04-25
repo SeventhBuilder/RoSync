@@ -67,6 +67,15 @@ __modules['main.client'] = function(moduleRequire, script)
 		"SoundService",
 		"TextChatService",
 	}
+	local SYNC_SERVICE_SET = {}
+	local READ_ONLY_SYNC_PATHS = {
+		["Workspace/Camera"] = true,
+		["Workspace/Terrain"] = true,
+	}
+	
+	for _, serviceName in ipairs(SYNC_SERVICES) do
+		SYNC_SERVICE_SET[serviceName] = true
+	end
 	
 	local toolbar = plugin:CreateToolbar("RoSync")
 	local button = toolbar:CreateButton("RoSync", "Open the RoSync panel", "")
@@ -328,6 +337,12 @@ __modules['main.client'] = function(moduleRequire, script)
 	local pushAll
 	local statusMode = "disconnected"
 	local suppressNextSocketCloseOutput = false
+	local serviceManifestCache = {}
+	local dirtyServiceNames = {}
+	
+	for _, serviceName in ipairs(SYNC_SERVICES) do
+		dirtyServiceNames[serviceName] = true
+	end
 	
 	local function daemonIndexedInstanceCount(statusResponse)
 		if type(statusResponse) ~= "table" then
@@ -540,6 +555,55 @@ __modules['main.client'] = function(moduleRequire, script)
 		end)
 	end
 	
+	local function serviceNameFromPath(pathValue)
+		if type(pathValue) ~= "string" or pathValue == "" then
+			return nil
+		end
+	
+		local slashIndex = string.find(pathValue, "/", 1, true)
+		if slashIndex then
+			return string.sub(pathValue, 1, slashIndex - 1)
+		end
+	
+		return pathValue
+	end
+	
+	local function serviceNameFromInstance(instance)
+		local current = instance
+		while current and current.Parent ~= game and current.Parent ~= nil do
+			current = current.Parent
+		end
+	
+		if current and SYNC_SERVICE_SET[current.Name] == true then
+			return current.Name
+		end
+	
+		return nil
+	end
+	
+	local function markServiceManifestDirty(serviceName)
+		if type(serviceName) ~= "string" or SYNC_SERVICE_SET[serviceName] ~= true then
+			return
+		end
+	
+		dirtyServiceNames[serviceName] = true
+		serviceManifestCache[serviceName] = nil
+	end
+	
+	local function markPathDirty(pathValue)
+		markServiceManifestDirty(serviceNameFromPath(pathValue))
+	end
+	
+	local function markInstanceDirty(instance)
+		markServiceManifestDirty(serviceNameFromInstance(instance))
+	end
+	
+	local function invalidateAllServiceManifests()
+		for _, serviceName in ipairs(SYNC_SERVICES) do
+			markServiceManifestDirty(serviceName)
+		end
+	end
+	
 	local function safeGetChildren(instance)
 		local success, children = pcall(function()
 			return instance:GetChildren()
@@ -650,6 +714,512 @@ __modules['main.client'] = function(moduleRequire, script)
 		})
 	end
 	
+	local function sendSyncPlan(plan)
+		if type(plan) ~= "table" or type(plan.direction) ~= "string" or type(plan.service) ~= "string" then
+			return false
+		end
+	
+		if not socketClient or not socketClient:isConnected() then
+			return false
+		end
+	
+		return sendMessage({
+			type = "SYNC_PLAN",
+			direction = plan.direction,
+			service = plan.service,
+			added = plan.added,
+			changed = plan.changed,
+			removed = plan.removed,
+			unchanged = plan.unchanged,
+			scanned = plan.scanned,
+			serviceIndex = plan.serviceIndex,
+			serviceCount = plan.serviceCount,
+			planComplete = plan.planComplete == true,
+		})
+	end
+	
+	local function sendSyncStage(stage)
+		if type(stage) ~= "table" or type(stage.direction) ~= "string" or type(stage.phase) ~= "string" then
+			return false
+		end
+	
+		if not socketClient or not socketClient:isConnected() then
+			return false
+		end
+	
+		return sendMessage({
+			type = "SYNC_STAGE",
+			direction = stage.direction,
+			phase = stage.phase,
+			service = stage.service,
+			serviceIndex = stage.serviceIndex,
+			serviceCount = stage.serviceCount,
+			detail = stage.detail,
+		})
+	end
+	
+	local function serializePushBatchInstance(instance)
+		local serialized = Serializer.serializeInstance(instance, false)
+		serialized.children = serialized.children or {}
+	
+		if instance ~= nil and instance.Parent == game then
+			serialized.children = {}
+			for _, child in ipairs(safeGetChildren(instance)) do
+				if shouldSyncInstance(child) then
+					table.insert(serialized.children, Serializer.serializeInstance(child, false))
+				end
+			end
+		end
+	
+		return serialized
+	end
+	
+	local function copySortedTags(tags)
+		local sorted = {}
+		for _, tag in ipairs(tags or {}) do
+			if type(tag) == "string" then
+				table.insert(sorted, tag)
+			end
+		end
+		table.sort(sorted)
+		return sorted
+	end
+	
+	local function shallowNodeSnapshot(node)
+		if type(node) ~= "table" then
+			return nil
+		end
+	
+		return {
+			className = node.className,
+			properties = node.properties or {},
+			attributes = node.attributes or {},
+			tags = copySortedTags(node.tags),
+			source = node.source,
+		}
+	end
+	
+	local function isSequentialArray(value)
+		if type(value) ~= "table" then
+			return false
+		end
+	
+		local count = 0
+		for key in pairs(value) do
+			if type(key) ~= "number" then
+				return false
+			end
+			count += 1
+		end
+	
+		for index = 1, count do
+			if value[index] == nil then
+				return false
+			end
+		end
+	
+		return true
+	end
+	
+	local function valuesEquivalent(left, right)
+		if left == right then
+			return true
+		end
+	
+		local leftType = type(left)
+		if leftType ~= type(right) then
+			return false
+		end
+	
+		if leftType ~= "table" then
+			return false
+		end
+	
+		local leftIsArray = isSequentialArray(left)
+		local rightIsArray = isSequentialArray(right)
+		if leftIsArray or rightIsArray then
+			if not leftIsArray or not rightIsArray or #left ~= #right then
+				return false
+			end
+	
+			for index, leftValue in ipairs(left) do
+				if not valuesEquivalent(leftValue, right[index]) then
+					return false
+				end
+			end
+	
+			return true
+		end
+	
+		local seenKeys = {}
+		for key, leftValue in pairs(left) do
+			seenKeys[key] = true
+			if not valuesEquivalent(leftValue, right[key]) then
+				return false
+			end
+		end
+	
+		for key, rightValue in pairs(right) do
+			if not seenKeys[key] and rightValue ~= nil then
+				return false
+			end
+		end
+	
+		return true
+	end
+	
+	local function indexRemoteTreeNode(node, snapshotIndex)
+		if type(node) ~= "table" or type(node.path) ~= "string" then
+			return
+		end
+	
+		snapshotIndex[node.path] = shallowNodeSnapshot(node)
+		for _, childNode in ipairs(node.children or {}) do
+			indexRemoteTreeNode(childNode, snapshotIndex)
+		end
+	end
+	
+	local function buildRemoteTreeSnapshotIndex(tree)
+		local snapshotIndex = {}
+		if type(tree) ~= "table" or type(tree.services) ~= "table" then
+			return snapshotIndex
+		end
+	
+		for _, serviceNode in ipairs(tree.services) do
+			indexRemoteTreeNode(serviceNode, snapshotIndex)
+		end
+	
+		return snapshotIndex
+	end
+	
+	local function buildRemoteServicePathIndex(tree)
+		local servicePathIndex = {}
+		if type(tree) ~= "table" or type(tree.services) ~= "table" then
+			return servicePathIndex
+		end
+	
+		local function visit(node, serviceName)
+			if type(node) ~= "table" or type(node.path) ~= "string" then
+				return
+			end
+	
+			local nextServiceName = serviceName or node.path
+			local pathSet = servicePathIndex[nextServiceName]
+			if type(pathSet) ~= "table" then
+				pathSet = {}
+				servicePathIndex[nextServiceName] = pathSet
+			end
+	
+			pathSet[node.path] = true
+			for _, childNode in ipairs(node.children or {}) do
+				visit(childNode, nextServiceName)
+			end
+		end
+	
+		for _, serviceNode in ipairs(tree.services) do
+			visit(serviceNode, nil)
+		end
+	
+		return servicePathIndex
+	end
+	
+	local function countPathDepth(pathValue)
+		local depth = 1
+		for _ in string.gmatch(pathValue, "/") do
+			depth += 1
+		end
+		return depth
+	end
+	
+	local function isSameOrDescendantPath(candidatePath, ancestorPath)
+		return candidatePath == ancestorPath or string.sub(candidatePath, 1, #ancestorPath + 1) == ancestorPath .. "/"
+	end
+	
+	local function isProtectedSyncPath(pathValue)
+		for protectedPath in pairs(READ_ONLY_SYNC_PATHS) do
+			if isSameOrDescendantPath(pathValue, protectedPath) then
+				return true
+			end
+		end
+	
+		return false
+	end
+	
+	local function collectServiceInstances(serviceName)
+		local service = game:FindService(serviceName)
+		local instances = {}
+		if not service then
+			return instances
+		end
+	
+		for _, descendant in ipairs(service:GetDescendants()) do
+			if shouldSyncInstance(descendant) then
+				table.insert(instances, descendant)
+			end
+		end
+	
+		if shouldSyncInstance(service) then
+			table.insert(instances, 1, service)
+		end
+	
+		return instances
+	end
+	
+	local function buildLocalServiceManifest(serviceName)
+		local instances = collectServiceInstances(serviceName)
+		local manifest = {
+			scanned = #instances,
+			pathSet = {},
+			snapshotIndex = {},
+			pullPathSet = {},
+			pullSnapshotIndex = {},
+			instanceByPath = {},
+		}
+	
+		for index, instance in ipairs(instances) do
+			local instancePath = PathUtil.getInstancePath(instance)
+			local serialized = serializePushBatchInstance(instance)
+			local snapshot = shallowNodeSnapshot(serialized)
+	
+			manifest.pathSet[instancePath] = true
+			manifest.snapshotIndex[instancePath] = snapshot
+			manifest.instanceByPath[instancePath] = instance
+	
+			if not isProtectedSyncPath(instancePath) then
+				manifest.pullPathSet[instancePath] = true
+				manifest.pullSnapshotIndex[instancePath] = snapshot
+			end
+	
+			if index % 200 == 0 then
+				task.wait()
+			end
+		end
+	
+		return manifest
+	end
+	
+	local function getLocalServiceManifest(serviceName)
+		local cachedManifest = serviceManifestCache[serviceName]
+		if cachedManifest ~= nil and dirtyServiceNames[serviceName] ~= true then
+			return cachedManifest
+		end
+	
+		local manifest = buildLocalServiceManifest(serviceName)
+		serviceManifestCache[serviceName] = manifest
+		dirtyServiceNames[serviceName] = false
+		return manifest
+	end
+	
+	local function selectServiceRemovalPaths(serviceName, localPathSet, remoteServicePathIndex)
+		local removalPaths = {}
+		if type(remoteServicePathIndex) ~= "table" then
+			return removalPaths
+		end
+	
+		local remotePathSet = remoteServicePathIndex[serviceName]
+		if type(remotePathSet) ~= "table" then
+			return removalPaths
+		end
+	
+		local missingPaths = {}
+		for remotePath in pairs(remotePathSet) do
+			if remotePath ~= serviceName and localPathSet[remotePath] ~= true then
+				table.insert(missingPaths, remotePath)
+			end
+		end
+	
+		table.sort(missingPaths, function(left, right)
+			local depthDifference = countPathDepth(left) - countPathDepth(right)
+			if depthDifference ~= 0 then
+				return depthDifference < 0
+			end
+			return left < right
+		end)
+	
+		local selectedPaths = {}
+		for _, remotePath in ipairs(missingPaths) do
+			local covered = false
+			for _, selectedPath in ipairs(selectedPaths) do
+				if isSameOrDescendantPath(remotePath, selectedPath) then
+					covered = true
+					break
+				end
+			end
+	
+			if not covered then
+				table.insert(selectedPaths, remotePath)
+				table.insert(removalPaths, remotePath)
+			end
+		end
+	
+		return removalPaths
+	end
+	
+	local function selectStudioRemovalPaths(serviceName, localPathSet, remoteServicePathIndex)
+		local removalPaths = {}
+		local remotePathSet = type(remoteServicePathIndex) == "table" and remoteServicePathIndex[serviceName] or nil
+		if type(remotePathSet) ~= "table" then
+			return removalPaths
+		end
+	
+		local missingPaths = {}
+		for localPath in pairs(localPathSet) do
+			if localPath ~= serviceName and remotePathSet[localPath] ~= true then
+				table.insert(missingPaths, localPath)
+			end
+		end
+	
+		table.sort(missingPaths, function(left, right)
+			local depthDifference = countPathDepth(left) - countPathDepth(right)
+			if depthDifference ~= 0 then
+				return depthDifference < 0
+			end
+			return left < right
+		end)
+	
+		local selectedPaths = {}
+		for _, localPath in ipairs(missingPaths) do
+			local covered = false
+			for _, selectedPath in ipairs(selectedPaths) do
+				if isSameOrDescendantPath(localPath, selectedPath) then
+					covered = true
+					break
+				end
+			end
+	
+			if not covered then
+				table.insert(selectedPaths, localPath)
+				table.insert(removalPaths, localPath)
+			end
+		end
+	
+		return removalPaths
+	end
+	
+	local function summarizePushServicePlan(serviceName, remoteSnapshotIndex, remoteServicePathIndex)
+		local manifest = getLocalServiceManifest(serviceName)
+		local entries = {}
+		local addedCount = 0
+		local changedCount = 0
+		local scannedCount = 0
+	
+		for instancePath, localSnapshot in pairs(manifest.snapshotIndex) do
+			scannedCount += 1
+			local remoteSnapshot = type(remoteSnapshotIndex) == "table" and remoteSnapshotIndex[instancePath] or nil
+			if not valuesEquivalent(localSnapshot, remoteSnapshot) then
+				local instance = manifest.instanceByPath[instancePath]
+				local serialized = instance and serializePushBatchInstance(instance) or nil
+				if serialized then
+					table.insert(entries, {
+						path = instancePath,
+						data = serialized,
+					})
+					if type(remoteSnapshot) == "table" then
+						changedCount += 1
+					else
+						addedCount += 1
+					end
+				end
+			end
+			if scannedCount % 200 == 0 then
+				task.wait()
+			end
+		end
+	
+		local removalPaths = selectServiceRemovalPaths(serviceName, manifest.pathSet, remoteServicePathIndex)
+		return {
+			name = serviceName,
+			scanned = manifest.scanned,
+			added = addedCount,
+			changed = changedCount,
+			removed = #removalPaths,
+			unchanged = math.max(0, manifest.scanned - addedCount - changedCount),
+			entries = entries,
+			removalPaths = removalPaths,
+		}
+	end
+	
+	local function summarizePullServicePlan(serviceName, remoteSnapshotIndex, remoteServicePathIndex)
+		local manifest = getLocalServiceManifest(serviceName)
+		local remotePathSet = type(remoteServicePathIndex) == "table" and remoteServicePathIndex[serviceName] or nil
+		local addedCount = 0
+		local changedCount = 0
+		local unchangedCount = 0
+	
+		local scannedRemoteCount = 0
+		for remotePath in pairs(remotePathSet or {}) do
+			if not isProtectedSyncPath(remotePath) then
+				local localSnapshot = manifest.pullSnapshotIndex[remotePath]
+				local remoteSnapshot = type(remoteSnapshotIndex) == "table" and remoteSnapshotIndex[remotePath] or nil
+				if localSnapshot == nil then
+					addedCount += 1
+				elseif not valuesEquivalent(localSnapshot, remoteSnapshot) then
+					changedCount += 1
+				else
+					unchangedCount += 1
+				end
+			end
+			scannedRemoteCount += 1
+			if scannedRemoteCount % 200 == 0 then
+				task.wait()
+			end
+		end
+	
+		local removalPaths = selectStudioRemovalPaths(serviceName, manifest.pullPathSet, remoteServicePathIndex)
+		return {
+			name = serviceName,
+			scanned = manifest.scanned,
+			added = addedCount,
+			changed = changedCount,
+			removed = #removalPaths,
+			unchanged = unchangedCount,
+			removalPaths = removalPaths,
+		}
+	end
+	
+	local function appendServicePlan(direction, plan)
+		local serviceName = plan.name or plan.service or "Service"
+		if (plan.added or 0) == 0 and (plan.changed or 0) == 0 and (plan.removed or 0) == 0 then
+			appendInfo(
+				string.format(
+					"%s plan for %s - no changes (%d unchanged).",
+					direction == "push" and "Push" or "Pull",
+					serviceName,
+					plan.unchanged or 0
+				)
+			)
+			return
+		end
+	
+		appendInfo(
+			string.format(
+				"%s plan for %s - %d added, %d changed, %d removed, %d unchanged.",
+				direction == "push" and "Push" or "Pull",
+				serviceName,
+				plan.added or 0,
+				plan.changed or 0,
+				plan.removed or 0,
+				plan.unchanged or 0
+			)
+		)
+	end
+	
+	local function broadcastServicePlan(direction, plan, serviceIndex, serviceCount)
+		appendServicePlan(direction, plan)
+		sendSyncPlan({
+			direction = direction,
+			service = plan.name,
+			added = plan.added or 0,
+			changed = plan.changed or 0,
+			removed = plan.removed or 0,
+			unchanged = plan.unchanged or 0,
+			scanned = plan.scanned or 0,
+			serviceIndex = serviceIndex,
+			serviceCount = serviceCount,
+			planComplete = serviceIndex == serviceCount,
+		})
+	end
+	
 	local function fetchAndApplyTree(reason, options)
 		if refreshInFlight then
 			refreshQueued = true
@@ -667,9 +1237,41 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		local applyOptions = nil
-		if type(options) == "table" and options.logProgress then
+		local shouldLogProgress = type(options) == "table" and options.logProgress == true
+		local shouldReconcileRemovals = type(options) == "table" and options.reconcileRemovals == true
+		local remoteSnapshotIndex = nil
+		local remoteServicePathIndex = nil
+		if type(response.tree) == "table" then
+			remoteSnapshotIndex = buildRemoteTreeSnapshotIndex(response.tree)
+			remoteServicePathIndex = buildRemoteServicePathIndex(response.tree)
+		end
+	
+		if shouldLogProgress or shouldReconcileRemovals then
+			setTransferState("Planning Pull", "Comparing Studio state against disk.", PULL_PURPLE)
+			appendInfo("Building Pull All plan service by service...")
+			for serviceIndex, serviceName in ipairs(SYNC_SERVICES) do
+				local planningDetail = string.format("Comparing %s (%d/%d).", serviceName, serviceIndex, #SYNC_SERVICES)
+				setTransferState("Planning Pull " .. tostring(serviceName), planningDetail, PULL_PURPLE)
+				appendInfo(string.format("Planning Pull for %s (%d/%d)...", serviceName, serviceIndex, #SYNC_SERVICES))
+				sendSyncStage({
+					direction = "pull",
+					phase = "planning",
+					service = serviceName,
+					serviceIndex = serviceIndex,
+					serviceCount = #SYNC_SERVICES,
+					detail = "Comparing Studio state against disk.",
+				})
+				local plan = summarizePullServicePlan(serviceName, remoteSnapshotIndex, remoteServicePathIndex)
+				broadcastServicePlan("pull", plan, serviceIndex, #SYNC_SERVICES)
+				task.wait()
+			end
+			appendInfo("Pull plan ready. Applying disk state to Studio...")
+		end
+	
+		if shouldLogProgress or shouldReconcileRemovals then
 			local serviceCount = #(response.tree.services or {})
 			applyOptions = {
+				reconcileRemovals = shouldReconcileRemovals,
 				batchSize = 50,
 				onProgress = function(done, total)
 					setTransferState("Pulling", string.format("%d/%d instances applied to Studio", done, total), PULL_PURPLE)
@@ -677,6 +1279,12 @@ __modules['main.client'] = function(moduleRequire, script)
 				onServiceStart = function(serviceName, total)
 					setTransferState("Pulling " .. tostring(serviceName), string.format("0/%d instances applied to Studio", total), PULL_PURPLE)
 					appendInfo(string.format("Pulling %s (%d instances)...", serviceName, total))
+					sendSyncStage({
+						direction = "pull",
+						phase = "applying",
+						service = serviceName,
+						detail = "Applying disk state to Studio.",
+					})
 					sendPullProgress({
 						service = serviceName,
 						done = 0,
@@ -695,10 +1303,19 @@ __modules['main.client'] = function(moduleRequire, script)
 						pullComplete = false,
 					})
 				end,
-				onServiceComplete = function(serviceName, done, total, isLastService)
+				onServiceComplete = function(serviceName, done, total, isLastService, removedCount)
 					local pullComplete = isLastService == true or serviceCount <= 1
-					setTransferState("Pulling " .. tostring(serviceName), string.format("%d/%d instances applied to Studio", done, total), PULL_PURPLE)
-					appendInfo(string.format("Pulled %s (%d instances).", serviceName, done))
+					local detailText = string.format("%d/%d instances applied to Studio", done, total)
+					if type(removedCount) == "number" and removedCount > 0 then
+						detailText = detailText .. string.format(" + %d removed", removedCount)
+					end
+	
+					setTransferState("Pulling " .. tostring(serviceName), detailText, PULL_PURPLE)
+					if type(removedCount) == "number" and removedCount > 0 then
+						appendInfo(string.format("Pulled %s (%d applied, %d removed).", serviceName, done, removedCount))
+					else
+						appendInfo(string.format("Pulled %s (%d instances).", serviceName, done))
+					end
 					sendPullProgress({
 						service = serviceName,
 						done = done,
@@ -711,12 +1328,22 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		applyInProgress = true
-		local applied, applyError, appliedCount = Deserializer.applyTree(response.tree, applyOptions)
+		local applied, applyError, appliedCount, removedCount = Deserializer.applyTree(response.tree, applyOptions)
 		applyInProgress = false
+		invalidateAllServiceManifests()
 	
-		if applied and type(options) == "table" and options.logProgress then
-			appendInfo(string.format("Pull All complete - %d instances applied", appliedCount or 0))
-			setTransferState("Ready", string.format("Pulled %d instances into Studio.", appliedCount or 0), STATUS_CONNECTED)
+		if applied and shouldLogProgress then
+			if type(removedCount) == "number" and removedCount > 0 then
+				appendInfo(string.format("Pull All complete - %d instances applied, %d removed", appliedCount or 0, removedCount))
+				setTransferState(
+					"Ready",
+					string.format("Pulled %d instances into Studio and removed %d stale instances.", appliedCount or 0, removedCount),
+					STATUS_CONNECTED
+				)
+			else
+				appendInfo(string.format("Pull All complete - %d instances applied", appliedCount or 0))
+				setTransferState("Ready", string.format("Pulled %d instances into Studio.", appliedCount or 0), STATUS_CONNECTED)
+			end
 		elseif applied and reason ~= "poll" then
 			appendLog("Applied daemon tree (" .. tostring(reason) .. ").")
 		elseif not applied then
@@ -806,6 +1433,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			applyInProgress = true
 			local applied, applyError = Deserializer.applyTree(payload.tree)
 			applyInProgress = false
+			invalidateAllServiceManifests()
 	
 			if applied then
 				appendInfo("Applied daemon project tree.")
@@ -818,6 +1446,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		if payload.type == "PUSH_REQUEST" then
 			fetchAndApplyTree("push-request", {
 				logProgress = true,
+				reconcileRemovals = true,
 			})
 			return
 		end
@@ -832,6 +1461,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			applyInProgress = true
 			local applied, applyError = Deserializer.applySyncInstance(payload.path, payload.data)
 			applyInProgress = false
+			markPathDirty(payload.path)
 	
 			if applied then
 				if existedBefore then
@@ -851,6 +1481,7 @@ __modules['main.client'] = function(moduleRequire, script)
 			applyInProgress = true
 			local removed, removeError = Deserializer.removeAtPath(payload.path)
 			applyInProgress = false
+			markPathDirty(payload.path)
 	
 			if removed then
 				appendEvent(payload.origin, "remove", payload.path)
@@ -864,6 +1495,8 @@ __modules['main.client'] = function(moduleRequire, script)
 			applyInProgress = true
 			local renamed, renameError = Deserializer.renameAtPath(payload.oldPath, payload.newPath)
 			applyInProgress = false
+			markPathDirty(payload.oldPath)
+			markPathDirty(payload.newPath)
 	
 			if renamed then
 				appendEvent(payload.origin, classifyPathMutation(payload.oldPath, payload.newPath), payload.oldPath, payload.newPath)
@@ -970,6 +1603,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	end
 	
 	local function pushInstance(instance, action, shouldLogEvent, propertyName)
+		markInstanceDirty(instance)
 		local serialized = serializeSyncTree(instance)
 		if not serialized then
 			return false
@@ -989,14 +1623,17 @@ __modules['main.client'] = function(moduleRequire, script)
 		return sent
 	end
 	
-	local function flushPushBatch(batch, progress)
-		if #batch == 0 then
+	local function flushPushBatch(batch, removedPaths, progress)
+		local normalizedBatch = batch or {}
+		local normalizedRemovedPaths = removedPaths or {}
+		if #normalizedBatch == 0 and #normalizedRemovedPaths == 0 then
 			return true
 		end
 	
 		local payload = {
 			type = "PUSH_BATCH",
-			instances = batch,
+			instances = normalizedBatch,
+			removedPaths = normalizedRemovedPaths,
 		}
 	
 		if type(progress) == "table" then
@@ -1021,82 +1658,167 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		appendInfo("Starting Push All...")
-		setTransferState("Pushing", "Scanning synced services in Studio.", PUSH_ORANGE)
+		setTransferState("Planning Push", "Comparing Studio state against disk.", PUSH_ORANGE)
+		httpClient:setBaseUrl(currentServerUrl())
 	
-		local grandTotal = 0
-		local batchSize = 50
-		local lastServiceIndex = 0
-		for _, serviceName in ipairs(SYNC_SERVICES) do
-			local service = game:FindService(serviceName)
-			if service and (shouldSyncInstance(service) or #service:GetDescendants() > 0) then
-				lastServiceIndex += 1
-			end
+		local remoteSnapshotIndex = nil
+		local remoteServicePathIndex = nil
+		local treeOk, treeResponse = httpClient:getTree()
+		if treeOk and type(treeResponse) == "table" and type(treeResponse.tree) == "table" then
+			remoteSnapshotIndex = buildRemoteTreeSnapshotIndex(treeResponse.tree)
+			remoteServicePathIndex = buildRemoteServicePathIndex(treeResponse.tree)
+			appendInfo("Comparing Studio state with the daemon tree before Push All.")
+		else
+			appendInfo("Daemon tree compare failed. Falling back to full Push All.", "warn")
 		end
-		local processedServiceIndex = 0
 	
-		for _, serviceName in ipairs(SYNC_SERVICES) do
-			local service = game:FindService(serviceName)
-			if not service then
-				continue
+		local batchSize = 50
+		local scannedTotal = 0
+		local addedTotal = 0
+		local changedTotal = 0
+		local removedTotal = 0
+		local servicePlans = {}
+		appendInfo("Building Push All plan service by service...")
+	
+		for serviceIndex, serviceName in ipairs(SYNC_SERVICES) do
+			local planningDetail = string.format("Comparing %s (%d/%d).", serviceName, serviceIndex, #SYNC_SERVICES)
+			setTransferState("Planning Push " .. tostring(serviceName), planningDetail, PUSH_ORANGE)
+			appendInfo(string.format("Planning Push for %s (%d/%d)...", serviceName, serviceIndex, #SYNC_SERVICES))
+			sendSyncStage({
+				direction = "push",
+				phase = "planning",
+				service = serviceName,
+				serviceIndex = serviceIndex,
+				serviceCount = #SYNC_SERVICES,
+				detail = "Comparing Studio state against disk.",
+			})
+			local plan = summarizePushServicePlan(serviceName, remoteSnapshotIndex, remoteServicePathIndex)
+			broadcastServicePlan("push", plan, serviceIndex, #SYNC_SERVICES)
+			scannedTotal += plan.scanned
+			addedTotal += plan.added
+			changedTotal += plan.changed
+			removedTotal += plan.removed
+			if #plan.entries > 0 or #plan.removalPaths > 0 then
+				table.insert(servicePlans, plan)
 			end
+			task.wait()
+		end
 	
-			local instances = {}
-			for _, descendant in ipairs(service:GetDescendants()) do
-				if shouldSyncInstance(descendant) then
-					table.insert(instances, descendant)
-				end
-			end
+		if #servicePlans == 0 then
+			appendInfo(string.format("Push All already matches disk - no changed instances found across %d checked entries.", scannedTotal))
+			setTransferState("Ready", "Studio already matches disk.", STATUS_CONNECTED)
+			return
+		end
 	
-			if shouldSyncInstance(service) then
-				table.insert(instances, 1, service)
-			end
+		appendInfo("Push plan ready. Exporting Studio changes to disk...")
 	
-			if #instances == 0 then
-				continue
-			end
+		for serviceIndex, plan in ipairs(servicePlans) do
+			local serviceName = plan.name
+			local entries = plan.entries
+			local removalPaths = plan.removalPaths
+			local differenceCount = #entries + #removalPaths
+			sendSyncStage({
+				direction = "push",
+				phase = "applying",
+				service = serviceName,
+				serviceIndex = serviceIndex,
+				serviceCount = #servicePlans,
+				detail = "Exporting Studio changes to disk.",
+			})
+			appendInfo(
+				string.format(
+					"Pushing %s (%d added, %d changed, %d removed of %d checked)...",
+					serviceName,
+					plan.added,
+					plan.changed,
+					#removalPaths,
+					plan.scanned
+				)
+			)
+			setTransferState("Pushing " .. tostring(serviceName), string.format("0/%d changes exported to disk", differenceCount), PUSH_ORANGE)
 	
-			processedServiceIndex += 1
-			appendInfo(string.format("Pushing %s (%d instances)...", serviceName, #instances))
-			setTransferState("Pushing " .. tostring(serviceName), string.format("0/%d instances exported to disk", #instances), PUSH_ORANGE)
-	
-			local serviceCount = 0
+			local processedCount = 0
 			local batch = {}
-			for index, instance in ipairs(instances) do
-				table.insert(batch, {
-					path = PathUtil.getInstancePath(instance),
-					data = Serializer.serializeInstance(instance, false),
-				})
+			for index, entry in ipairs(entries) do
+				table.insert(batch, entry)
 	
-				if #batch >= batchSize or index == #instances then
-					local nextDone = serviceCount + #batch
+				if #batch >= batchSize or index == #entries then
+					local nextDone = processedCount + #batch
 					setTransferState(
 						"Pushing " .. tostring(serviceName),
-						string.format("%d/%d instances exported to disk", nextDone, #instances),
+						string.format("%d/%d changes exported to disk", nextDone, differenceCount),
 						PUSH_ORANGE
 					)
-					local sent = flushPushBatch(batch, {
+					local sent = flushPushBatch(batch, {}, {
 						service = serviceName,
 						done = nextDone,
-						total = #instances,
-						serviceComplete = nextDone == #instances,
-						pushComplete = nextDone == #instances and processedServiceIndex == lastServiceIndex,
+						total = differenceCount,
+						serviceComplete = nextDone == differenceCount,
+						pushComplete = nextDone == differenceCount and serviceIndex == #servicePlans,
 					})
 					if not sent then
 						appendInfo("Push All batch send failed.", "warn")
 					end
 	
-					serviceCount = nextDone
+					processedCount = nextDone
 					batch = {}
 					task.wait(0.05)
 				end
 			end
 	
-			grandTotal += serviceCount
-			appendInfo(string.format("%s - %d instances", serviceName, serviceCount))
+			local removalBatch = {}
+			for index, removalPath in ipairs(removalPaths) do
+				table.insert(removalBatch, removalPath)
+	
+				if #removalBatch >= batchSize or index == #removalPaths then
+					local nextDone = processedCount + #removalBatch
+					setTransferState(
+						"Pushing " .. tostring(serviceName),
+						string.format("%d/%d changes exported to disk", nextDone, differenceCount),
+						PUSH_ORANGE
+					)
+					local sent = flushPushBatch({}, removalBatch, {
+						service = serviceName,
+						done = nextDone,
+						total = differenceCount,
+						serviceComplete = nextDone == differenceCount,
+						pushComplete = nextDone == differenceCount and serviceIndex == #servicePlans,
+					})
+					if not sent then
+						appendInfo("Push All removal batch send failed.", "warn")
+					end
+	
+					processedCount = nextDone
+					removalBatch = {}
+					task.wait(0.05)
+				end
+			end
+	
+			appendInfo(
+				string.format(
+					"%s - pushed %d added, %d changed, and removed %d stale instances",
+					serviceName,
+					plan.added,
+					plan.changed,
+					#removalPaths
+				)
+			)
 		end
 	
-		appendInfo(string.format("Push All complete - %d total instances", grandTotal))
-		setTransferState("Ready", string.format("Pushed %d instances into the daemon.", grandTotal), STATUS_CONNECTED)
+		appendInfo(
+			string.format(
+				"Push All complete - %d added, %d changed, and %d stale instances removed after checking %d total instances",
+				addedTotal,
+				changedTotal,
+				removedTotal,
+				scannedTotal
+			)
+		)
+		setTransferState(
+			"Ready",
+			string.format("Applied %d Studio changes into the daemon.", addedTotal + changedTotal + removedTotal),
+			STATUS_CONNECTED
+		)
 	end
 	
 	local function startWatch()
@@ -1113,12 +1835,16 @@ __modules['main.client'] = function(moduleRequire, script)
 			return instance ~= nil and instance ~= game and not applyInProgress
 		end, {
 			onAdded = function(instance)
+				markInstanceDirty(instance)
 				pushInstance(instance, "add", true)
 			end,
 			onChanged = function(instance, propertyName)
+				markInstanceDirty(instance)
 				pushInstance(instance, "update", true, propertyName)
 			end,
 			onRenamed = function(instance, oldPath, newPath)
+				markPathDirty(oldPath)
+				markPathDirty(newPath)
 				local serialized = Serializer.serializeInstance(instance, true)
 				local sent = sendMessage({
 					type = "INSTANCE_RENAMED",
@@ -1131,6 +1857,7 @@ __modules['main.client'] = function(moduleRequire, script)
 				end
 			end,
 			onRemoving = function(_, previousPath)
+				markPathDirty(previousPath)
 				local sent = sendMessage({
 					type = "REMOVE_INSTANCE",
 					path = previousPath,
@@ -1217,6 +1944,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		setTransferState("Pulling", "Requesting the daemon tree.", PULL_PURPLE)
 		fetchAndApplyTree("pull-all", {
 			logProgress = true,
+			reconcileRemovals = true,
 		})
 	end)
 	
@@ -1813,6 +2541,12 @@ __modules['sync/Listener'] = function(moduleRequire, script)
 			end
 		end
 	
+		for _, child in ipairs(game:GetChildren()) do
+			if Listener.shouldSyncInstance(child, shouldSync) then
+				connectInstance(child)
+			end
+		end
+	
 		table.insert(connections, game.DescendantAdded:Connect(onAdded))
 		table.insert(connections, game.DescendantRemoving:Connect(onRemoving))
 	
@@ -2201,6 +2935,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 	local READ_ONLY_INSTANCES = {
 		["Workspace/Camera"] = true,
+		["Workspace/Terrain"] = true,
 	}
 	local LOCKED_SERVICES = {
 		Workspace = true,
@@ -2588,8 +3323,22 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		return parentPath .. "/" .. childName
 	end
 	
+	local function isSameOrDescendantPath(candidatePath, ancestorPath)
+		if type(candidatePath) ~= "string" or type(ancestorPath) ~= "string" then
+			return false
+		end
+	
+		return candidatePath == ancestorPath or string.sub(candidatePath, 1, #ancestorPath + 1) == ancestorPath .. "/"
+	end
+	
 	local function isReadOnlyPath(pathValue)
-		return READ_ONLY_INSTANCES[pathValue] == true
+		for protectedPath in pairs(READ_ONLY_INSTANCES) do
+			if isSameOrDescendantPath(pathValue, protectedPath) then
+				return true
+			end
+		end
+	
+		return false
 	end
 	
 	local function isLockedServiceName(serviceName)
@@ -2598,6 +3347,41 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 	local function isLockedServiceInstance(instance)
 		return instance ~= nil and instance.Parent == game and isLockedServiceName(instance.Name)
+	end
+	
+	local function isRuntimePlayerInstance(instance)
+		local current = instance
+		while current and current ~= game do
+			local success, isPlayer = pcall(function()
+				return current:IsA("Player")
+			end)
+			if success and isPlayer then
+				return true
+			end
+			current = current.Parent
+		end
+	
+		return false
+	end
+	
+	local function shouldProtectFromRemoval(instance, pathValue)
+		if instance == nil then
+			return true
+		end
+	
+		if isReadOnlyPath(pathValue) then
+			return true
+		end
+	
+		if isLockedServiceInstance(instance) then
+			return true
+		end
+	
+		if isRuntimePlayerInstance(instance) then
+			return true
+		end
+	
+		return false
 	end
 	
 	local function countNodeInstances(node)
@@ -2633,6 +3417,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		return {
 			done = 0,
 			total = total,
+			removed = 0,
 			batchSize = type(options.batchSize) == "number" and math.max(1, options.batchSize) or 50,
 			onProgress = onProgress,
 			onServiceStart = onServiceStart,
@@ -2641,6 +3426,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			currentService = nil,
 			currentServiceDone = 0,
 			currentServiceTotal = 0,
+			currentServiceRemoved = 0,
 			currentServiceIsLast = false,
 		}
 	end
@@ -2653,6 +3439,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		progressState.currentService = serviceName
 		progressState.currentServiceDone = 0
 		progressState.currentServiceTotal = total
+		progressState.currentServiceRemoved = 0
 		progressState.currentServiceIsLast = isLastService == true
 	
 		if progressState.onServiceStart then
@@ -2670,13 +3457,15 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				progressState.currentService,
 				progressState.currentServiceDone,
 				progressState.currentServiceTotal,
-				progressState.currentServiceIsLast == true
+				progressState.currentServiceIsLast == true,
+				progressState.currentServiceRemoved
 			)
 		end
 	
 		progressState.currentService = nil
 		progressState.currentServiceDone = 0
 		progressState.currentServiceTotal = 0
+		progressState.currentServiceRemoved = 0
 		progressState.currentServiceIsLast = false
 	end
 	
@@ -2699,6 +3488,17 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 		if progressState.onProgress and (progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total) then
 			progressState.onProgress(progressState.done, progressState.total)
+		end
+	end
+	
+	local function markRemoval(progressState)
+		if progressState == nil then
+			return
+		end
+	
+		progressState.removed += 1
+		if progressState.currentService ~= nil then
+			progressState.currentServiceRemoved += 1
 		end
 	end
 	
@@ -2814,8 +3614,53 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 	local applyNode
 	
-	local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState)
+	local function planDesiredChildren(parentInstance, childNodes)
+		local plannedChildren = {}
+		local matchedInstances = {}
+	
 		for _, childNode in ipairs(childNodes or {}) do
+			local childInstance = findCandidateChild(parentInstance, childNode)
+			if childInstance ~= nil and matchedInstances[childInstance] == true then
+				childInstance = nil
+			end
+	
+			if childInstance ~= nil then
+				matchedInstances[childInstance] = true
+			end
+	
+			table.insert(plannedChildren, {
+				node = childNode,
+				instance = childInstance,
+			})
+		end
+	
+		return plannedChildren, matchedInstances
+	end
+	
+	local function reconcileChildren(parentInstance, matchedInstances, progressState)
+		for _, childInstance in ipairs(parentInstance:GetChildren()) do
+			if matchedInstances[childInstance] ~= true then
+				local childPath = PathUtil.getInstancePath(childInstance)
+				if not shouldProtectFromRemoval(childInstance, childPath) then
+					local removed = pcall(function()
+						childInstance:Destroy()
+					end)
+					if removed then
+						markRemoval(progressState)
+					end
+				end
+			end
+		end
+	end
+	
+	local function applyChildrenRecursive(parentInstance, parentPath, childNodes, progressState, options)
+		local plannedChildren, matchedInstances = planDesiredChildren(parentInstance, childNodes)
+		if type(options) == "table" and options.reconcileRemovals == true then
+			reconcileChildren(parentInstance, matchedInstances, progressState)
+		end
+	
+		for _, plannedChild in ipairs(plannedChildren) do
+			local childNode = plannedChild.node
 			local childSegment = childNode._pathSegment or childNode.pathSegment or childNode.name
 			local childPath = joinPath(parentPath, childSegment)
 			if isReadOnlyPath(childPath) then
@@ -2823,18 +3668,18 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				continue
 			end
 	
-			local childInstance = findCandidateChild(parentInstance, childNode)
+			local childInstance = plannedChild.instance
 			if not childInstance then
 				childInstance = createInstanceForNode(childNode)
 				childInstance.Name = childNode.name
 				childInstance.Parent = parentInstance
 			end
 	
-			applyNode(childInstance, childNode, childPath, progressState)
+			applyNode(childInstance, childNode, childPath, progressState, options)
 		end
 	end
 	
-	applyNode = function(instance, node, nodePath, progressState)
+	applyNode = function(instance, node, nodePath, progressState, options)
 		if isReadOnlyPath(nodePath) then
 			markProgress(progressState)
 			return true
@@ -2846,7 +3691,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		applyTagsAdditive(instance, node.tags)
 		local deferredPrimaryPart = applyProperties(instance, node)
 		markProgress(progressState)
-		applyChildrenRecursive(instance, nodePath, node.children, progressState)
+		applyChildrenRecursive(instance, nodePath, node.children, progressState, options)
 	
 		if type(deferredPrimaryPart) == "table" then
 			local referenceValue = deferredPrimaryPart.value or deferredPrimaryPart.Value or deferredPrimaryPart
@@ -2862,7 +3707,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	end
 	
-	local function applyServiceNode(serviceNode, progressState)
+	local function applyServiceNode(serviceNode, progressState, options)
 		local service = getServiceRoot(serviceNode.name)
 		if not service then
 			return false, "Missing service " .. tostring(serviceNode.name)
@@ -2872,7 +3717,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		applyTagsAdditive(service, serviceNode.tags)
 		applyProperties(service, serviceNode)
 		markProgress(progressState)
-		applyChildrenRecursive(service, serviceNode.name, serviceNode.children, progressState)
+		applyChildrenRecursive(service, serviceNode.name, serviceNode.children, progressState, options)
 	
 		return true
 	end
@@ -2904,9 +3749,9 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 				source = node.source,
 				children = node.children or {},
 				_pathSegment = node._pathSegment or segments[1],
-			}, progressState)
+			}, progressState, options)
 			ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
-			return success, result, progressState and progressState.done or countNodeInstances(node)
+			return success, result, progressState and progressState.done or countNodeInstances(node), progressState and progressState.removed or 0
 		end
 	
 		local parent, parentError = ensureParentForPath(pathValue)
@@ -2933,9 +3778,9 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			instance.Parent = parent
 		end
 	
-		applyNode(instance, childNode, pathValue, progressState)
+		applyNode(instance, childNode, pathValue, progressState, options)
 		ChangeHistoryService:SetWaypoint("After RoSync Sync Instance")
-		return true, nil, progressState and progressState.done or countNodeInstances(childNode)
+		return true, nil, progressState and progressState.done or countNodeInstances(childNode), progressState and progressState.removed or 0
 	end
 	
 	function Deserializer.removeAtPath(pathValue)
@@ -3027,7 +3872,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	
 		for index, serviceNode in ipairs(tree.services) do
 			beginServiceProgress(progressState, serviceNode.name, countNodeInstances(serviceNode), index == #tree.services)
-			local success, result = applyServiceNode(serviceNode, progressState)
+			local success, result = applyServiceNode(serviceNode, progressState, options)
 			completeServiceProgress(progressState)
 			if not success then
 				table.insert(errors, tostring(result))
@@ -3040,7 +3885,7 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			return false, table.concat(errors, "\n")
 		end
 	
-		return true, nil, progressState and progressState.done or countTreeInstances(tree)
+		return true, nil, progressState and progressState.done or countTreeInstances(tree), progressState and progressState.removed or 0
 	end
 	
 	return Deserializer

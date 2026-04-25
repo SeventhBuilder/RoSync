@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import type { ProjectTreeNode, ProjectTreeSnapshot, ResolvedRoSyncConfig, RuntimeStatusSummary, SerializableNode } from "../config/types.js";
 import type { RoSyncIgnoreRules } from "../config/ignore.js";
@@ -175,6 +176,26 @@ async function detectSourceFile(directoryPath: string, className: string): Promi
   };
 }
 
+function detectSourceFileFromEntries(
+  directoryPath: string,
+  className: string,
+  entries: Dirent[],
+): { sourceFilePath: string | null; scriptKind: ProjectTreeNode["scriptKind"] } {
+  const descriptor = scriptDescriptorForClass(className);
+  if (!descriptor) {
+    return {
+      sourceFilePath: null,
+      scriptKind: null,
+    };
+  }
+
+  const hasSourceFile = entries.some((entry) => entry.isFile() && entry.name === descriptor.fileName);
+  return {
+    sourceFilePath: hasSourceFile ? path.join(directoryPath, descriptor.fileName) : null,
+    scriptKind: descriptor.kind,
+  };
+}
+
 async function readSourceFile(sourceFilePath: string | null): Promise<string | null> {
   if (!sourceFilePath) {
     return null;
@@ -205,7 +226,9 @@ async function readDirectoryNode(
   }
 
   const metadataPath = path.join(directoryPath, INSTANCE_FILE);
-  if (!(await exists(metadataPath))) {
+  const entries = await fs.readdir(directoryPath, { withFileTypes: true });
+  const hasMetadata = entries.some((entry) => entry.isFile() && entry.name === INSTANCE_FILE);
+  if (!hasMetadata) {
     return null;
   }
 
@@ -224,28 +247,22 @@ async function readDirectoryNode(
   }
 
   const nodePath = parentPath ? `${parentPath}/${directorySegment}` : directorySegment;
-  const children: ProjectTreeNode[] = [];
-
-  const entries = await fs.readdir(directoryPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-
-    const childNode = await readDirectoryNode(
-      config,
-      ignoreRules,
-      path.join(directoryPath, entry.name),
-      nodePath,
-      counters,
-    );
-    if (childNode) {
-      children.push(childNode);
-    }
-  }
-
-  const { sourceFilePath, scriptKind } = await detectSourceFile(directoryPath, className);
-  const source = await readSourceFile(sourceFilePath);
+  const childEntries = entries.filter((entry) => entry.isDirectory());
+  const { sourceFilePath, scriptKind } = detectSourceFileFromEntries(directoryPath, className, entries);
+  const sourcePromise = readSourceFile(sourceFilePath);
+  const childNodeResults = await Promise.all(
+    childEntries.map((entry) =>
+      readDirectoryNode(
+        config,
+        ignoreRules,
+        path.join(directoryPath, entry.name),
+        nodePath,
+        counters,
+      ),
+    ),
+  );
+  const source = await sourcePromise;
+  const children = childNodeResults.filter((childNode): childNode is ProjectTreeNode => childNode !== null);
 
   return {
     name,
@@ -277,18 +294,19 @@ export async function buildProjectTree(config: ResolvedRoSyncConfig, ignoreRules
 
   try {
     const entries = await fs.readdir(config.srcDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const node = await readDirectoryNode(
-        config,
-        ignoreRules,
-        path.join(config.srcDir, entry.name),
-        "",
-        counters,
-      );
+    const serviceEntries = entries.filter((entry) => entry.isDirectory());
+    const nodes = await Promise.all(
+      serviceEntries.map((entry) =>
+        readDirectoryNode(
+          config,
+          ignoreRules,
+          path.join(config.srcDir, entry.name),
+          "",
+          counters,
+        ),
+      ),
+    );
+    for (const node of nodes) {
       if (node) {
         services.push(node);
       }

@@ -109,6 +109,11 @@ interface StudioPushBatchProgress {
   pushComplete: boolean;
 }
 
+interface StudioBatchMutationResult {
+  applied: boolean;
+  conflict: boolean;
+}
+
 function toRelativePath(rootDir: string, targetPath: string): string {
   return path.relative(rootDir, targetPath).replace(/\\/g, "/");
 }
@@ -578,7 +583,7 @@ export class SyncEngine {
     await this.reconcileDiskTree(origin);
   }
 
-  public async handleStudioSync(pathValue: string, data: SerializableNode): Promise<void> {
+  private async applyStudioSyncWithoutReconcile(pathValue: string, data: SerializableNode): Promise<StudioBatchMutationResult> {
     this.noteStudioEvent(pathValue);
     const remoteHash = hashText(
       stableStringify({
@@ -592,7 +597,10 @@ export class SyncEngine {
     );
 
     if (this.consumePendingStudioSync(pathValue, remoteHash)) {
-      return;
+      return {
+        applied: false,
+        conflict: false,
+      };
     }
 
     const localEntry = this.flattenedEntries.get(pathValue);
@@ -616,80 +624,27 @@ export class SyncEngine {
           hash: remoteHash,
         },
       );
-      return;
+      return {
+        applied: false,
+        conflict: true,
+      };
     }
 
     await this.hooks.syncProjectNode(pathValue, data);
-    await this.reconcileDiskTree("studio");
-  }
-
-  public async handleStudioPushBatch(
-    instances: Array<{ path: string; data: SerializableNode }>,
-    progress?: Partial<StudioPushBatchProgress>,
-  ): Promise<void> {
-    const normalizedProgress: StudioPushBatchProgress = {
-      service: typeof progress?.service === "string" ? progress.service : null,
-      done: typeof progress?.done === "number" ? progress.done : null,
-      total: typeof progress?.total === "number" ? progress.total : null,
-      serviceComplete: progress?.serviceComplete === true,
-      pushComplete: progress?.pushComplete === true,
+    return {
+      applied: true,
+      conflict: false,
     };
-    let wroteAnyInstance = false;
-
-    for (const entry of instances) {
-      this.noteStudioEvent(entry.path);
-
-      try {
-        await this.hooks.syncProjectNode(entry.path, entry.data);
-        wroteAnyInstance = true;
-      } catch (error) {
-        this.hooks.logger.debug(
-          `Push All write skipped for ${entry.path}: ${String((error as Error).message ?? error)}`,
-        );
-      }
-    }
-
-    if (normalizedProgress.service) {
-      this.hooks.broadcastToClients("editor", {
-        type: "PUSH_PROGRESS",
-        service: normalizedProgress.service,
-        done: normalizedProgress.done,
-        total: normalizedProgress.total,
-        serviceComplete: normalizedProgress.serviceComplete,
-        pushComplete: normalizedProgress.pushComplete,
-      });
-
-      if (normalizedProgress.serviceComplete && normalizedProgress.total) {
-        this.hooks.logger.info(
-          `Pulling from Studio completed for ${normalizedProgress.service} (${normalizedProgress.total}/${normalizedProgress.total}).`,
-        );
-      } else if (normalizedProgress.done === instances.length && normalizedProgress.total) {
-        this.hooks.logger.info(`Pulling from Studio started for ${normalizedProgress.service} (${normalizedProgress.total} instances).`);
-      }
-    }
-
-    if (!wroteAnyInstance) {
-      return;
-    }
-
-    if (progress && !normalizedProgress.serviceComplete) {
-      return;
-    }
-
-    try {
-      await this.reconcileDiskTree("studio");
-    } catch (error) {
-      this.hooks.logger.debug(
-        `Push All reconcile skipped after filesystem error: ${String((error as Error).message ?? error)}`,
-      );
-    }
   }
 
-  public async handleStudioRemove(pathValue: string): Promise<void> {
+  private async applyStudioRemoveWithoutReconcile(pathValue: string): Promise<StudioBatchMutationResult> {
     this.noteStudioEvent(pathValue);
 
     if (this.consumePendingStudioRemoval(pathValue)) {
-      return;
+      return {
+        applied: false,
+        conflict: false,
+      };
     }
 
     const localRecord = this.records.get(pathValue);
@@ -712,10 +667,109 @@ export class SyncEngine {
           hash: null,
         },
       );
-      return;
+      return {
+        applied: false,
+        conflict: true,
+      };
     }
 
     await this.hooks.deleteProjectNode(pathValue);
+    return {
+      applied: true,
+      conflict: false,
+    };
+  }
+
+  public async handleStudioSync(pathValue: string, data: SerializableNode): Promise<void> {
+    const result = await this.applyStudioSyncWithoutReconcile(pathValue, data);
+    if (!result.applied) {
+      return;
+    }
+
+    await this.reconcileDiskTree("studio");
+  }
+
+  public async handleStudioPushBatch(
+    instances: Array<{ path: string; data: SerializableNode }>,
+    removedPaths: string[] = [],
+    progress?: Partial<StudioPushBatchProgress>,
+  ): Promise<void> {
+    const normalizedProgress: StudioPushBatchProgress = {
+      service: typeof progress?.service === "string" ? progress.service : null,
+      done: typeof progress?.done === "number" ? progress.done : null,
+      total: typeof progress?.total === "number" ? progress.total : null,
+      serviceComplete: progress?.serviceComplete === true,
+      pushComplete: progress?.pushComplete === true,
+    };
+    let mutated = false;
+
+    for (const entry of instances) {
+      try {
+        const result = await this.applyStudioSyncWithoutReconcile(entry.path, entry.data);
+        mutated = mutated || result.applied;
+      } catch (error) {
+        this.hooks.logger.debug(
+          `Push All write skipped for ${entry.path}: ${String((error as Error).message ?? error)}`,
+        );
+      }
+    }
+
+    for (const pathValue of removedPaths) {
+      try {
+        const result = await this.applyStudioRemoveWithoutReconcile(pathValue);
+        mutated = mutated || result.applied;
+      } catch (error) {
+        this.hooks.logger.debug(
+          `Push All remove skipped for ${pathValue}: ${String((error as Error).message ?? error)}`,
+        );
+      }
+    }
+
+    if (mutated && (!progress || normalizedProgress.serviceComplete)) {
+      try {
+        await this.reconcileDiskTree("studio");
+      } catch (error) {
+        this.hooks.logger.debug(
+          `Push All reconcile skipped after filesystem error: ${String((error as Error).message ?? error)}`,
+        );
+      }
+    }
+
+    if (normalizedProgress.service) {
+      this.hooks.broadcastToClients("editor", {
+        type: "PUSH_PROGRESS",
+        service: normalizedProgress.service,
+        done: normalizedProgress.done,
+        total: normalizedProgress.total,
+        serviceComplete: normalizedProgress.serviceComplete,
+        pushComplete: normalizedProgress.pushComplete,
+      });
+
+      if (
+        normalizedProgress.serviceComplete &&
+        normalizedProgress.done !== null &&
+        normalizedProgress.total !== null
+      ) {
+        this.hooks.logger.info(
+          `Pulling from Studio completed for ${normalizedProgress.service} (${normalizedProgress.done}/${normalizedProgress.total}).`,
+        );
+      } else if (normalizedProgress.done !== null && normalizedProgress.total !== null) {
+        this.hooks.logger.info(
+          `Pulling from Studio progress for ${normalizedProgress.service} (${normalizedProgress.done}/${normalizedProgress.total}).`,
+        );
+      }
+    }
+
+    if (!mutated) {
+      return;
+    }
+  }
+
+  public async handleStudioRemove(pathValue: string): Promise<void> {
+    const result = await this.applyStudioRemoveWithoutReconcile(pathValue);
+    if (!result.applied) {
+      return;
+    }
     await this.reconcileDiskTree("studio");
   }
 

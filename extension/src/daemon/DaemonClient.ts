@@ -40,6 +40,8 @@ export interface DaemonConflict {
   remoteHash: string | null;
 }
 
+export type ConflictStrategy = "ours" | "theirs" | "manual";
+
 export interface DaemonDiagnostics {
   syncedInstances: number;
   driftedInstances: number;
@@ -101,6 +103,11 @@ interface SchemaResponse {
   classDescriptor: SchemaClassDescriptor | null;
 }
 
+interface ConflictsResponse {
+  ok: boolean;
+  conflicts: DaemonConflict[];
+}
+
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
 export type DaemonOrigin = "studio" | "editor" | "disk";
 
@@ -109,6 +116,28 @@ export type DaemonEvent =
   | { type: "SYNC_INSTANCE"; path: string; data: Record<string, unknown>; origin?: DaemonOrigin }
   | { type: "REMOVE_INSTANCE"; path: string; origin?: DaemonOrigin }
   | { type: "RENAME_INSTANCE"; oldPath: string; newPath: string; origin?: DaemonOrigin }
+  | {
+      type: "SYNC_PLAN";
+      direction: "push" | "pull";
+      service: string;
+      added: number;
+      changed: number;
+      removed: number;
+      unchanged: number;
+      scanned: number | null;
+      serviceIndex: number | null;
+      serviceCount: number | null;
+      planComplete: boolean;
+    }
+  | {
+      type: "SYNC_STAGE";
+      direction: "push" | "pull";
+      phase: "planning" | "applying";
+      service: string | null;
+      serviceIndex: number | null;
+      serviceCount: number | null;
+      detail: string | null;
+    }
   | { type: "PUSH_PROGRESS"; service: string; done: number | null; total: number | null; serviceComplete: boolean; pushComplete: boolean }
   | { type: "PULL_PROGRESS"; service: string; done: number | null; total: number | null; serviceComplete: boolean; pullComplete: boolean }
   | { type: "CONFLICT"; conflict: DaemonConflict & { local?: unknown; remote?: unknown } }
@@ -138,7 +167,7 @@ export class DaemonClient implements vscode.Disposable {
   public readonly onDidReceiveEvent = this.onDidReceiveEventEmitter.event;
   private socket: WebSocket | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private reconnectDelayMs = 1_000;
+  private reconnectDelayMs = 500;
   private disposed = false;
   private currentState: ConnectionState = "disconnected";
   private currentEndpoint: DaemonEndpoint | null = null;
@@ -193,6 +222,24 @@ export class DaemonClient implements vscode.Disposable {
     const endpoint = await this.getEndpoint();
     const response = await requestJson<SchemaResponse>(endpoint, `/schema?class=${encodeURIComponent(className)}`);
     return response.classDescriptor;
+  }
+
+  public async conflicts(): Promise<DaemonConflict[]> {
+    const endpoint = await this.getEndpoint();
+    const response = await requestJson<ConflictsResponse>(endpoint, "/api/conflicts");
+    return response.conflicts;
+  }
+
+  public async resolveConflict(id: string, strategy: ConflictStrategy): Promise<DaemonConflict[]> {
+    const endpoint = await this.getEndpoint();
+    const response = await requestJson<ConflictsResponse>(endpoint, "/api/conflicts/resolve", {
+      method: "POST",
+      body: JSON.stringify({
+        id,
+        strategy,
+      }),
+    });
+    return response.conflicts;
   }
 
   public async createNode(parentPath: string, name: string, className: string): Promise<ProjectTreeNode> {
@@ -276,7 +323,7 @@ export class DaemonClient implements vscode.Disposable {
     this.socket = socket;
 
     socket.once("open", () => {
-      this.reconnectDelayMs = 1_000;
+      this.reconnectDelayMs = 500;
       this.updateConnectionState("connected", endpoint);
       socket.send(
         JSON.stringify({
@@ -315,7 +362,7 @@ export class DaemonClient implements vscode.Disposable {
     }
 
     const delayMs = this.reconnectDelayMs;
-    this.reconnectDelayMs = Math.min(30_000, this.reconnectDelayMs * 2);
+    this.reconnectDelayMs = Math.min(5_000, this.reconnectDelayMs * 2);
     this.updateConnectionState("reconnecting", this.currentEndpoint);
 
     this.reconnectTimer = setTimeout(() => {
@@ -374,6 +421,39 @@ export class DaemonClient implements vscode.Disposable {
             oldPath: payload.oldPath,
             newPath: payload.newPath,
             origin: payload.origin === "studio" || payload.origin === "editor" || payload.origin === "disk" ? payload.origin : undefined,
+          });
+        }
+        return;
+      case "SYNC_PLAN":
+        if ((payload.direction === "push" || payload.direction === "pull") && typeof payload.service === "string") {
+          this.onDidReceiveEventEmitter.fire({
+            type: "SYNC_PLAN",
+            direction: payload.direction,
+            service: payload.service,
+            added: typeof payload.added === "number" ? payload.added : 0,
+            changed: typeof payload.changed === "number" ? payload.changed : 0,
+            removed: typeof payload.removed === "number" ? payload.removed : 0,
+            unchanged: typeof payload.unchanged === "number" ? payload.unchanged : 0,
+            scanned: typeof payload.scanned === "number" ? payload.scanned : null,
+            serviceIndex: typeof payload.serviceIndex === "number" ? payload.serviceIndex : null,
+            serviceCount: typeof payload.serviceCount === "number" ? payload.serviceCount : null,
+            planComplete: payload.planComplete === true,
+          });
+        }
+        return;
+      case "SYNC_STAGE":
+        if (
+          (payload.direction === "push" || payload.direction === "pull")
+          && (payload.phase === "planning" || payload.phase === "applying")
+        ) {
+          this.onDidReceiveEventEmitter.fire({
+            type: "SYNC_STAGE",
+            direction: payload.direction,
+            phase: payload.phase,
+            service: typeof payload.service === "string" ? payload.service : null,
+            serviceIndex: typeof payload.serviceIndex === "number" ? payload.serviceIndex : null,
+            serviceCount: typeof payload.serviceCount === "number" ? payload.serviceCount : null,
+            detail: typeof payload.detail === "string" ? payload.detail : null,
           });
         }
         return;

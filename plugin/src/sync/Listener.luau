@@ -261,6 +261,12 @@ function Listener.attach(shouldSync, callbacks, options)
 		end
 	end
 
+	for _, child in ipairs(game:GetChildren()) do
+		if Listener.shouldSyncInstance(child, shouldSync) then
+			connectInstance(child)
+		end
+	end
+
 	table.insert(connections, game.DescendantAdded:Connect(onAdded))
 	table.insert(connections, game.DescendantRemoving:Connect(onRemoving))
 
