@@ -43,7 +43,23 @@ export interface WatchServerContext {
   moveProjectNode(oldPath: string, newPath: string): Promise<void>;
   deleteProjectNode(nodePath: string): Promise<void>;
   syncFromStudio(nodePath: string, payload: SerializableNode): Promise<void>;
-  pushBatchFromStudio(instances: Array<{ path: string; data: SerializableNode }>): Promise<void>;
+  pushBatchFromStudio(
+    instances: Array<{ path: string; data: SerializableNode }>,
+    progress?: {
+      service?: string | null;
+      done?: number | null;
+      total?: number | null;
+      serviceComplete?: boolean;
+      pushComplete?: boolean;
+    },
+  ): Promise<void>;
+  reportPullProgressFromStudio(progress: {
+    service?: string | null;
+    done?: number | null;
+    total?: number | null;
+    serviceComplete?: boolean;
+    pullComplete?: boolean;
+  }): Promise<void>;
   removeFromStudio(nodePath: string): Promise<void>;
   renameFromStudio(oldPath: string, newPath: string): Promise<void>;
   noteEditorActivity(activity: {

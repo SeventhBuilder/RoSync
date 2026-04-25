@@ -101,6 +101,14 @@ export interface SyncEngineHooks {
   };
 }
 
+interface StudioPushBatchProgress {
+  service: string | null;
+  done: number | null;
+  total: number | null;
+  serviceComplete: boolean;
+  pushComplete: boolean;
+}
+
 function toRelativePath(rootDir: string, targetPath: string): string {
   return path.relative(rootDir, targetPath).replace(/\\/g, "/");
 }
@@ -615,7 +623,17 @@ export class SyncEngine {
     await this.reconcileDiskTree("studio");
   }
 
-  public async handleStudioPushBatch(instances: Array<{ path: string; data: SerializableNode }>): Promise<void> {
+  public async handleStudioPushBatch(
+    instances: Array<{ path: string; data: SerializableNode }>,
+    progress?: Partial<StudioPushBatchProgress>,
+  ): Promise<void> {
+    const normalizedProgress: StudioPushBatchProgress = {
+      service: typeof progress?.service === "string" ? progress.service : null,
+      done: typeof progress?.done === "number" ? progress.done : null,
+      total: typeof progress?.total === "number" ? progress.total : null,
+      serviceComplete: progress?.serviceComplete === true,
+      pushComplete: progress?.pushComplete === true,
+    };
     let wroteAnyInstance = false;
 
     for (const entry of instances) {
@@ -631,7 +649,30 @@ export class SyncEngine {
       }
     }
 
+    if (normalizedProgress.service) {
+      this.hooks.broadcastToClients("editor", {
+        type: "PUSH_PROGRESS",
+        service: normalizedProgress.service,
+        done: normalizedProgress.done,
+        total: normalizedProgress.total,
+        serviceComplete: normalizedProgress.serviceComplete,
+        pushComplete: normalizedProgress.pushComplete,
+      });
+
+      if (normalizedProgress.serviceComplete && normalizedProgress.total) {
+        this.hooks.logger.info(
+          `Pulling from Studio completed for ${normalizedProgress.service} (${normalizedProgress.total}/${normalizedProgress.total}).`,
+        );
+      } else if (normalizedProgress.done === instances.length && normalizedProgress.total) {
+        this.hooks.logger.info(`Pulling from Studio started for ${normalizedProgress.service} (${normalizedProgress.total} instances).`);
+      }
+    }
+
     if (!wroteAnyInstance) {
+      return;
+    }
+
+    if (progress && !normalizedProgress.serviceComplete) {
       return;
     }
 

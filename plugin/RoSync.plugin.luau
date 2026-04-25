@@ -186,7 +186,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	statusDotCorner.Parent = statusDot
 	
 	local controlsFrame = Instance.new("Frame")
-	controlsFrame.Size = UDim2.new(1, -24, 0, 80)
+	controlsFrame.Size = UDim2.new(1, -24, 0, 116)
 	controlsFrame.Position = UDim2.new(0, 12, 0, 48)
 	controlsFrame.BackgroundTransparency = 1
 	controlsFrame.Parent = root
@@ -232,9 +232,55 @@ __modules['main.client'] = function(moduleRequire, script)
 		UDim2.new(1/3, -5, 1, 0)
 	)
 	
+	local transferFrame = Instance.new("Frame")
+	transferFrame.Size = UDim2.new(1, 0, 0, 26)
+	transferFrame.Position = UDim2.new(0, 0, 0, 90)
+	transferFrame.BackgroundColor3 = PANEL_COLOR
+	transferFrame.BorderSizePixel = 0
+	transferFrame.Parent = controlsFrame
+	applyCorner(transferFrame)
+	
+	local transferStroke = Instance.new("UIStroke")
+	transferStroke.Color = PANEL_BORDER
+	transferStroke.Thickness = 1
+	transferStroke.Transparency = 0.15
+	transferStroke.Parent = transferFrame
+	
+	local transferAccent = Instance.new("Frame")
+	transferAccent.Size = UDim2.new(0, 4, 1, 0)
+	transferAccent.BackgroundColor3 = STATUS_GRAY
+	transferAccent.BorderSizePixel = 0
+	transferAccent.Parent = transferFrame
+	
+	local transferAccentCorner = Instance.new("UICorner")
+	transferAccentCorner.CornerRadius = UDim.new(0, 6)
+	transferAccentCorner.Parent = transferAccent
+	
+	local transferTitleLabel = Instance.new("TextLabel")
+	transferTitleLabel.Size = UDim2.new(0, 132, 1, 0)
+	transferTitleLabel.Position = UDim2.new(0, 14, 0, 0)
+	transferTitleLabel.BackgroundTransparency = 1
+	transferTitleLabel.Font = Enum.Font.GothamMedium
+	transferTitleLabel.Text = "Idle"
+	transferTitleLabel.TextColor3 = TEXT_PRIMARY
+	transferTitleLabel.TextSize = 12
+	transferTitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	transferTitleLabel.Parent = transferFrame
+	
+	local transferDetailLabel = Instance.new("TextLabel")
+	transferDetailLabel.Size = UDim2.new(1, -156, 1, 0)
+	transferDetailLabel.Position = UDim2.new(0, 146, 0, 0)
+	transferDetailLabel.BackgroundTransparency = 1
+	transferDetailLabel.Font = Enum.Font.Code
+	transferDetailLabel.Text = "Connect to start syncing."
+	transferDetailLabel.TextColor3 = Color3.fromRGB(148, 163, 184)
+	transferDetailLabel.TextSize = 11
+	transferDetailLabel.TextXAlignment = Enum.TextXAlignment.Left
+	transferDetailLabel.Parent = transferFrame
+	
 	local logFeed = Instance.new("Frame")
-	logFeed.Size = UDim2.new(1, -24, 1, -140)
-	logFeed.Position = UDim2.new(0, 12, 0, 140)
+	logFeed.Size = UDim2.new(1, -24, 1, -188)
+	logFeed.Position = UDim2.new(0, 12, 0, 176)
 	logFeed.BackgroundColor3 = PANEL_COLOR
 	logFeed.BorderSizePixel = 0
 	logFeed.Parent = root
@@ -452,6 +498,21 @@ __modules['main.client'] = function(moduleRequire, script)
 		statusDot.BackgroundColor3 = STATUS_DISCONNECTED
 	end
 	
+	local function setTransferState(title, detail, accentColor)
+		transferTitleLabel.Text = tostring(title or "Idle")
+		transferDetailLabel.Text = tostring(detail or "")
+		transferAccent.BackgroundColor3 = accentColor or STATUS_GRAY
+	end
+	
+	local function resetTransferState()
+		if desiredConnection then
+			setTransferState("Ready", "Waiting for the next sync request.", STATUS_CONNECTED)
+			return
+		end
+	
+		setTransferState("Idle", "Connect to start syncing.", STATUS_GRAY)
+	end
+	
 	task.spawn(function()
 		while widget.Parent ~= nil do
 			setStatus(statusMode)
@@ -570,6 +631,25 @@ __modules['main.client'] = function(moduleRequire, script)
 		return success
 	end
 	
+	local function sendPullProgress(progress)
+		if type(progress) ~= "table" or type(progress.service) ~= "string" then
+			return false
+		end
+	
+		if not socketClient or not socketClient:isConnected() then
+			return false
+		end
+	
+		return sendMessage({
+			type = "PULL_PROGRESS",
+			service = progress.service,
+			done = progress.done,
+			total = progress.total,
+			serviceComplete = progress.serviceComplete == true,
+			pullComplete = progress.pullComplete == true,
+		})
+	end
+	
 	local function fetchAndApplyTree(reason, options)
 		if refreshInFlight then
 			refreshQueued = true
@@ -588,10 +668,44 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		local applyOptions = nil
 		if type(options) == "table" and options.logProgress then
+			local serviceCount = #(response.tree.services or {})
 			applyOptions = {
 				batchSize = 50,
 				onProgress = function(done, total)
-					appendInfo(string.format("Applied %d/%d instances", done, total))
+					setTransferState("Pulling", string.format("%d/%d instances applied to Studio", done, total), PULL_PURPLE)
+				end,
+				onServiceStart = function(serviceName, total)
+					setTransferState("Pulling " .. tostring(serviceName), string.format("0/%d instances applied to Studio", total), PULL_PURPLE)
+					appendInfo(string.format("Pulling %s (%d instances)...", serviceName, total))
+					sendPullProgress({
+						service = serviceName,
+						done = 0,
+						total = total,
+						serviceComplete = false,
+						pullComplete = false,
+					})
+				end,
+				onServiceProgress = function(serviceName, done, total)
+					setTransferState("Pulling " .. tostring(serviceName), string.format("%d/%d instances applied to Studio", done, total), PULL_PURPLE)
+					sendPullProgress({
+						service = serviceName,
+						done = done,
+						total = total,
+						serviceComplete = false,
+						pullComplete = false,
+					})
+				end,
+				onServiceComplete = function(serviceName, done, total, isLastService)
+					local pullComplete = isLastService == true or serviceCount <= 1
+					setTransferState("Pulling " .. tostring(serviceName), string.format("%d/%d instances applied to Studio", done, total), PULL_PURPLE)
+					appendInfo(string.format("Pulled %s (%d instances).", serviceName, done))
+					sendPullProgress({
+						service = serviceName,
+						done = done,
+						total = total,
+						serviceComplete = true,
+						pullComplete = pullComplete,
+					})
 				end,
 			}
 		end
@@ -602,10 +716,12 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 		if applied and type(options) == "table" and options.logProgress then
 			appendInfo(string.format("Pull All complete - %d instances applied", appliedCount or 0))
+			setTransferState("Ready", string.format("Pulled %d instances into Studio.", appliedCount or 0), STATUS_CONNECTED)
 		elseif applied and reason ~= "poll" then
 			appendLog("Applied daemon tree (" .. tostring(reason) .. ").")
 		elseif not applied then
 			appendLog("Tree apply failed (" .. tostring(reason) .. "): " .. tostring(applyError), "warn")
+			setTransferState("Needs Attention", tostring(applyError or "Tree apply failed."), STATUS_CONFLICT)
 		end
 	
 		refreshInFlight = false
@@ -620,6 +736,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 	local function syncAfterHandshake()
 		httpClient:setBaseUrl(currentServerUrl())
+		resetTransferState()
 	
 		local statusOk, statusResponse = httpClient:request("GET", "/status")
 		if statusOk then
@@ -699,7 +816,9 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		if payload.type == "PUSH_REQUEST" then
-			fetchAndApplyTree("push-request")
+			fetchAndApplyTree("push-request", {
+				logProgress = true,
+			})
 			return
 		end
 	
@@ -870,15 +989,25 @@ __modules['main.client'] = function(moduleRequire, script)
 		return sent
 	end
 	
-	local function flushPushBatch(batch)
+	local function flushPushBatch(batch, progress)
 		if #batch == 0 then
 			return true
 		end
 	
-		return sendMessage({
+		local payload = {
 			type = "PUSH_BATCH",
 			instances = batch,
-		})
+		}
+	
+		if type(progress) == "table" then
+			payload.service = progress.service
+			payload.done = progress.done
+			payload.total = progress.total
+			payload.serviceComplete = progress.serviceComplete == true
+			payload.pushComplete = progress.pushComplete == true
+		end
+	
+		return sendMessage(payload)
 	end
 	
 	pushAll = function()
@@ -892,9 +1021,18 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		appendInfo("Starting Push All...")
+		setTransferState("Pushing", "Scanning synced services in Studio.", PUSH_ORANGE)
 	
 		local grandTotal = 0
 		local batchSize = 50
+		local lastServiceIndex = 0
+		for _, serviceName in ipairs(SYNC_SERVICES) do
+			local service = game:FindService(serviceName)
+			if service and (shouldSyncInstance(service) or #service:GetDescendants() > 0) then
+				lastServiceIndex += 1
+			end
+		end
+		local processedServiceIndex = 0
 	
 		for _, serviceName in ipairs(SYNC_SERVICES) do
 			local service = game:FindService(serviceName)
@@ -917,6 +1055,10 @@ __modules['main.client'] = function(moduleRequire, script)
 				continue
 			end
 	
+			processedServiceIndex += 1
+			appendInfo(string.format("Pushing %s (%d instances)...", serviceName, #instances))
+			setTransferState("Pushing " .. tostring(serviceName), string.format("0/%d instances exported to disk", #instances), PUSH_ORANGE)
+	
 			local serviceCount = 0
 			local batch = {}
 			for index, instance in ipairs(instances) do
@@ -926,12 +1068,24 @@ __modules['main.client'] = function(moduleRequire, script)
 				})
 	
 				if #batch >= batchSize or index == #instances then
-					local sent = flushPushBatch(batch)
+					local nextDone = serviceCount + #batch
+					setTransferState(
+						"Pushing " .. tostring(serviceName),
+						string.format("%d/%d instances exported to disk", nextDone, #instances),
+						PUSH_ORANGE
+					)
+					local sent = flushPushBatch(batch, {
+						service = serviceName,
+						done = nextDone,
+						total = #instances,
+						serviceComplete = nextDone == #instances,
+						pushComplete = nextDone == #instances and processedServiceIndex == lastServiceIndex,
+					})
 					if not sent then
 						appendInfo("Push All batch send failed.", "warn")
 					end
 	
-					serviceCount += #batch
+					serviceCount = nextDone
 					batch = {}
 					task.wait(0.05)
 				end
@@ -942,6 +1096,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		appendInfo(string.format("Push All complete - %d total instances", grandTotal))
+		setTransferState("Ready", string.format("Pushed %d instances into the daemon.", grandTotal), STATUS_CONNECTED)
 	end
 	
 	local function startWatch()
@@ -1002,6 +1157,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	local function disconnectFromDaemon()
 		desiredConnection = false
 		refreshConnectToggle()
+		resetTransferState()
 		cancelReconnect()
 		stopPolling()
 		stopWatch()
@@ -1024,6 +1180,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		httpClient:setBaseUrl(currentServerUrl())
 		desiredConnection = true
 		refreshConnectToggle()
+		setTransferState("Connecting", "Checking daemon health on localhost.", CONNECT_BLUE)
 		startWatch()
 	
 		local success, response = httpClient:getHealth()
@@ -1057,6 +1214,7 @@ __modules['main.client'] = function(moduleRequire, script)
 		end
 	
 		appendInfo("Starting Pull All...")
+		setTransferState("Pulling", "Requesting the daemon tree.", PULL_PURPLE)
 		fetchAndApplyTree("pull-all", {
 			logProgress = true,
 		})
@@ -1089,6 +1247,7 @@ __modules['main.client'] = function(moduleRequire, script)
 	
 	refreshConnectToggle()
 	setStatus("disconnected")
+	resetTransferState()
 	appendLog("RoSync plugin ready.")
 	writeStudioOutput("RoSync plugin ready.")
 	
@@ -2458,7 +2617,16 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 	end
 	
 	local function createProgressState(options, total)
-		if type(options) ~= "table" or type(options.onProgress) ~= "function" then
+		if type(options) ~= "table" then
+			return nil
+		end
+	
+		local onProgress = type(options.onProgress) == "function" and options.onProgress or nil
+		local onServiceStart = type(options.onServiceStart) == "function" and options.onServiceStart or nil
+		local onServiceProgress = type(options.onServiceProgress) == "function" and options.onServiceProgress or nil
+		local onServiceComplete = type(options.onServiceComplete) == "function" and options.onServiceComplete or nil
+	
+		if onProgress == nil and onServiceStart == nil and onServiceProgress == nil and onServiceComplete == nil then
 			return nil
 		end
 	
@@ -2466,8 +2634,50 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 			done = 0,
 			total = total,
 			batchSize = type(options.batchSize) == "number" and math.max(1, options.batchSize) or 50,
-			onProgress = options.onProgress,
+			onProgress = onProgress,
+			onServiceStart = onServiceStart,
+			onServiceProgress = onServiceProgress,
+			onServiceComplete = onServiceComplete,
+			currentService = nil,
+			currentServiceDone = 0,
+			currentServiceTotal = 0,
+			currentServiceIsLast = false,
 		}
+	end
+	
+	local function beginServiceProgress(progressState, serviceName, total, isLastService)
+		if progressState == nil then
+			return
+		end
+	
+		progressState.currentService = serviceName
+		progressState.currentServiceDone = 0
+		progressState.currentServiceTotal = total
+		progressState.currentServiceIsLast = isLastService == true
+	
+		if progressState.onServiceStart then
+			progressState.onServiceStart(serviceName, total, isLastService == true)
+		end
+	end
+	
+	local function completeServiceProgress(progressState)
+		if progressState == nil or progressState.currentService == nil then
+			return
+		end
+	
+		if progressState.onServiceComplete then
+			progressState.onServiceComplete(
+				progressState.currentService,
+				progressState.currentServiceDone,
+				progressState.currentServiceTotal,
+				progressState.currentServiceIsLast == true
+			)
+		end
+	
+		progressState.currentService = nil
+		progressState.currentServiceDone = 0
+		progressState.currentServiceTotal = 0
+		progressState.currentServiceIsLast = false
 	end
 	
 	local function markProgress(progressState)
@@ -2476,7 +2686,18 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		end
 	
 		progressState.done += 1
-		if progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total then
+		if progressState.currentService ~= nil then
+			progressState.currentServiceDone += 1
+			if progressState.onServiceProgress then
+				local serviceDone = progressState.currentServiceDone
+				local serviceTotal = progressState.currentServiceTotal
+				if serviceDone % progressState.batchSize == 0 or serviceDone >= serviceTotal then
+					progressState.onServiceProgress(progressState.currentService, serviceDone, serviceTotal)
+				end
+			end
+		end
+	
+		if progressState.onProgress and (progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total) then
 			progressState.onProgress(progressState.done, progressState.total)
 		end
 	end
@@ -2804,8 +3025,10 @@ __modules['sync/Deserializer'] = function(moduleRequire, script)
 		local progressState = createProgressState(options, countTreeInstances(tree))
 		ChangeHistoryService:SetWaypoint("Before RoSync Apply")
 	
-		for _, serviceNode in ipairs(tree.services) do
+		for index, serviceNode in ipairs(tree.services) do
+			beginServiceProgress(progressState, serviceNode.name, countNodeInstances(serviceNode), index == #tree.services)
 			local success, result = applyServiceNode(serviceNode, progressState)
+			completeServiceProgress(progressState)
 			if not success then
 				table.insert(errors, tostring(result))
 			end

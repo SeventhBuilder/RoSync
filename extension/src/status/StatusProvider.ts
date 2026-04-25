@@ -17,12 +17,18 @@ function formatTimestamp(value: string | null | undefined): string {
   return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value;
 }
 
+function pathIsWithinService(nodePath: string, serviceName: string): boolean {
+  return nodePath === serviceName || nodePath.startsWith(`${serviceName}/`);
+}
+
 export class StatusProvider implements vscode.TreeDataProvider<StatusItem>, vscode.Disposable {
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<StatusItem | undefined>();
   public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
   private health: DaemonHealth | null = null;
   private error: string | null = null;
   private connectionState: ConnectionState = "disconnected";
+  private activeStudioPushService: string | null = null;
+  private activity: string | null = null;
   private readonly eventSubscription: vscode.Disposable;
 
   public constructor(private readonly daemonClient: DaemonClient) {
@@ -32,9 +38,39 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem>, vsco
         if (event.state === "connected") {
           void this.refresh();
         } else {
+          this.activeStudioPushService = null;
+          this.activity = null;
+          this.onDidChangeTreeDataEmitter.fire(undefined);
+        }
+      } else if (event.type === "PUSH_PROGRESS") {
+        const progressText = event.done !== null && event.total !== null ? `${event.done}/${event.total}` : "working";
+        this.activeStudioPushService = event.pushComplete ? null : event.service;
+        this.activity = event.pushComplete ? null : `Pulling from Studio: ${event.service} ${progressText}`;
+        if (event.serviceComplete || event.pushComplete) {
+          void this.refresh();
+        } else {
+          this.onDidChangeTreeDataEmitter.fire(undefined);
+        }
+      } else if (event.type === "PULL_PROGRESS") {
+        const progressText = event.done !== null && event.total !== null ? `${event.done}/${event.total}` : "working";
+        this.activity = event.pullComplete ? null : `Pushing to Studio: ${event.service} ${progressText}`;
+        if (event.serviceComplete || event.pullComplete) {
+          void this.refresh();
+        } else {
           this.onDidChangeTreeDataEmitter.fire(undefined);
         }
       } else if (event.type === "SYNC_INSTANCE" || event.type === "REMOVE_INSTANCE" || event.type === "RENAME_INSTANCE" || event.type === "CONFLICT") {
+        if (
+          "origin" in event &&
+          event.origin === "studio" &&
+          this.activeStudioPushService &&
+          "path" in event &&
+          typeof event.path === "string" &&
+          pathIsWithinService(event.path, this.activeStudioPushService)
+        ) {
+          return;
+        }
+
         void this.refresh();
       } else if (event.type === "ERROR") {
         this.error = event.message;
@@ -82,6 +118,7 @@ export class StatusProvider implements vscode.TreeDataProvider<StatusItem>, vsco
 
     return [
       new StatusItem("Connection", this.connectionState),
+      ...(this.activity ? [new StatusItem("Activity", this.activity)] : []),
       new StatusItem("Project", this.health.project),
       new StatusItem("Daemon", `${this.health.host}:${this.health.port}`),
       new StatusItem("Synced", `${this.health.diagnostics.syncedInstances}`),

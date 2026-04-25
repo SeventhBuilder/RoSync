@@ -241,15 +241,43 @@ export function attachWebSocketServer(
               break;
             }
 
-            await context.pushBatchFromStudio(parsedInstances);
+            const progress = {
+              service: typeof payload.service === "string" ? payload.service : null,
+              done: typeof payload.done === "number" ? payload.done : null,
+              total: typeof payload.total === "number" ? payload.total : null,
+              serviceComplete: payload.serviceComplete === true,
+              pushComplete: payload.pushComplete === true,
+            };
+            await context.pushBatchFromStudio(parsedInstances, progress);
             context.broadcastToClients("editor", {
               type: "BATCH_SYNCED",
               count: parsedInstances.length,
+              service: progress.service,
+              done: progress.done,
+              total: progress.total,
+              serviceComplete: progress.serviceComplete,
+              pushComplete: progress.pushComplete,
             });
             safeSend(socket, {
               type: "ACK",
               message: "PUSH_BATCH applied.",
               count: parsedInstances.length,
+            });
+            break;
+          }
+          case "PULL_PROGRESS": {
+            const progress = {
+              service: typeof payload.service === "string" ? payload.service : null,
+              done: typeof payload.done === "number" ? payload.done : null,
+              total: typeof payload.total === "number" ? payload.total : null,
+              serviceComplete: payload.serviceComplete === true,
+              pullComplete: payload.pullComplete === true,
+            };
+            await context.reportPullProgressFromStudio(progress);
+            safeSend(socket, {
+              type: "ACK",
+              message: "PULL_PROGRESS acknowledged.",
+              service: progress.service,
             });
             break;
           }

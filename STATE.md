@@ -1,5 +1,5 @@
 # RoSync Implementation State
-> Last updated: 2026-04-24 by Codex
+> Last updated: 2026-04-25 by Codex
 
 ## Implemented and Working
 - Daemon foundation: `rosync init`, `watch`, `status`, `doctor`, `schema update`, `push`, `pull`, `place`, `git`, `update`, and `uninstall` command surfaces exist; daemon boots on loopback and health/status endpoints work, verified by the existing daemon test suite plus local `npm run test`, `npm run build`, and `npm run check`.
@@ -27,6 +27,7 @@
 - Push All currently does a full service-by-service export of the allowed sync roots on each run; incremental Studio-side diff export is still future work.
 - Roblox Studio plugin: transport, watch, pull/apply, and serializer foundations exist, but end-to-end safety, blocked-service enforcement, Play-mode guards, and verified full-property coverage are still incomplete.
 - Pull All is additive-only in current code: the plugin fetches the daemon tree directly, applies disk state without deleting unmatched Studio instances, preserves locked services in place, and surfaces progress in the plugin log, but this still needs Studio verification against the installed plugin.
+- Bulk transfer progress routing is implemented in current code: Studio Push All now emits per-service pull indicators to `rosync watch` and the VS Code extension, Studio Pull All emits per-service push indicators back to the daemon/editor, and the extension suppresses per-instance node fetches during Studio Push All in favor of service-level refreshes. This still needs end-to-end manual verification against the installed plugin and extension before it can move to working.
 - Sync scope is now enforced by a strict top-level allowlist in code: only `Workspace`, `Players`, `Lighting`, `MaterialService`, `ReplicatedFirst`, `ReplicatedStorage`, `ServerScriptService`, `ServerStorage`, `StarterGui`, `StarterPack`, `StarterPlayer`, `Teams`, `SoundService`, and `TextChatService` are meant to sync; blocked services and their descendants no longer receive listeners at all, but this still needs Studio verification against the updated installed plugin before it can move to working.
 - Runtime `Player` instances and their descendants under `Players` are blocked more aggressively in current code, but this still needs Studio verification against real play sessions.
 - `_RoSyncManaged` attribute pollution is removed in current deserializer code, but old `.instance.json` files or Studio state may still contain stale data from earlier runs until they are rewritten or cleaned.
@@ -38,7 +39,7 @@
 - RunService play-mode guarding is implemented in current plugin code for watch/push/pull paths, but still needs Studio verification against the updated installed plugin.
 - Rename in Studio to disk propagation is committed and pushed, but still needs end-to-end Studio verification before it can move to working; owned by `plugin/src/sync/Listener.luau`, `plugin/src/main.client.luau`, and `daemon/src/sync/engine.ts`.
 - Plugin UI redesign is committed and pushed with a single Connect/Disconnect toggle, no Start Watch button, reduced Studio Output noise, white rename logs, blue move logs for reparent operations, and a status-dot reconnect indicator, but still needs Studio verification before it can move to working; owned by `plugin/src/main.client.luau`.
-- VS Code extension: Explorer and status panels are live, activation logging is now explicit in the `RoSync` output channel, ThemeIcon-based class icons now exist, but the property panel, conflict diff UX, Git history panel, AI agent log/context generation, and broader polish are still incomplete at the repo level.
+- VS Code extension: Explorer, status, and property panels are live, activation logging is explicit in the `RoSync` output channel, ThemeIcon-based class icons now exist, and bulk Studio Push All refreshes are now batched by service instead of per-instance node fetches, but conflict diff UX, Git history panel, AI agent log/context generation, and broader polish are still incomplete at the repo level.
 - Docs/tutorial parity: README, architecture, testing, and docs scaffolding exist, but the full tutorial, troubleshooting, schema reference, and broader Docusaurus parity with the prompt are still unfinished.
 - Install/release flow: source installers and uninstallers exist, but full fresh-machine verification, extension packaging automation, and release-grade parity still need work.
 
@@ -49,4 +50,4 @@
 - Fresh-machine gate verification for Phases 8-10: medium priority - installers and update/uninstall need a full clean-environment proof pass.
 
 ## Current Focus
-Re-test the updated installed Studio plugin after the latest plugin fixes, focusing first on first-connect safety, strict service filtering, runtime-player blocking, additive Push All/Pull All behavior, recursive disk-to-Studio creation, reduced update-log noise, camera behavior, rename/move propagation, and VS Code Explorer activation visibility.
+Re-test the updated installed Studio plugin and VS Code extension together after the latest transfer-progress and batch-refresh changes, focusing first on first-connect safety, strict service filtering, runtime-player blocking, additive Push All/Pull All behavior, service-by-service progress visibility, faster Explorer/property refresh during Push All, recursive disk-to-Studio creation, reduced update-log noise, camera behavior, and rename/move propagation.

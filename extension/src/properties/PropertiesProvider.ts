@@ -48,6 +48,10 @@ function pathMatches(selectedPath: string, candidatePath: string): boolean {
   );
 }
 
+function pathIsWithinService(nodePath: string, serviceName: string): boolean {
+  return nodePath === serviceName || nodePath.startsWith(`${serviceName}/`);
+}
+
 function renameSelectedPath(selectedPath: string, oldPath: string, newPath: string): string | null {
   if (selectedPath === oldPath) {
     return newPath;
@@ -509,6 +513,7 @@ export class PropertiesProvider implements vscode.WebviewViewProvider, vscode.Di
   private schema: SchemaClassDescriptor | null = null;
   private banner: BannerState | null = null;
   private loading = false;
+  private activeStudioPushService: string | null = null;
   private readonly eventSubscription: vscode.Disposable;
 
   public constructor(private readonly daemonClient: DaemonClient) {
@@ -567,8 +572,25 @@ export class PropertiesProvider implements vscode.WebviewViewProvider, vscode.Di
 
     switch (event.type) {
       case "SYNC_INSTANCE":
+        if (
+          event.origin === "studio" &&
+          this.activeStudioPushService &&
+          pathIsWithinService(this.selectedNode.path, this.activeStudioPushService)
+        ) {
+          return;
+        }
+
         if (pathMatches(this.selectedNode.path, event.path)) {
           await this.refreshSelection(this.selectedNode.path, false);
+        }
+        return;
+      case "PUSH_PROGRESS":
+        this.activeStudioPushService = event.pushComplete ? null : event.service;
+        if (pathIsWithinService(this.selectedNode.path, event.service) && event.serviceComplete) {
+          await this.refreshSelection(this.selectedNode.path, false);
+          if (event.pushComplete) {
+            this.activeStudioPushService = null;
+          }
         }
         return;
       case "RENAME_INSTANCE": {
@@ -596,6 +618,11 @@ export class PropertiesProvider implements vscode.WebviewViewProvider, vscode.Di
         return;
       case "WELCOME":
         await this.refreshSelection(this.selectedNode.path, false);
+        return;
+      case "CONNECTION_STATE":
+        if (event.state === "disconnected") {
+          this.activeStudioPushService = null;
+        }
         return;
       case "ERROR":
         this.banner = {

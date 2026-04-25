@@ -109,6 +109,8 @@ export type DaemonEvent =
   | { type: "SYNC_INSTANCE"; path: string; data: Record<string, unknown>; origin?: DaemonOrigin }
   | { type: "REMOVE_INSTANCE"; path: string; origin?: DaemonOrigin }
   | { type: "RENAME_INSTANCE"; oldPath: string; newPath: string; origin?: DaemonOrigin }
+  | { type: "PUSH_PROGRESS"; service: string; done: number | null; total: number | null; serviceComplete: boolean; pushComplete: boolean }
+  | { type: "PULL_PROGRESS"; service: string; done: number | null; total: number | null; serviceComplete: boolean; pullComplete: boolean }
   | { type: "CONFLICT"; conflict: DaemonConflict & { local?: unknown; remote?: unknown } }
   | { type: "ERROR"; code: string | null; message: string }
   | { type: "CONNECTION_STATE"; state: ConnectionState; endpoint: DaemonEndpoint | null };
@@ -372,6 +374,30 @@ export class DaemonClient implements vscode.Disposable {
             oldPath: payload.oldPath,
             newPath: payload.newPath,
             origin: payload.origin === "studio" || payload.origin === "editor" || payload.origin === "disk" ? payload.origin : undefined,
+          });
+        }
+        return;
+      case "PUSH_PROGRESS":
+        if (typeof payload.service === "string") {
+          this.onDidReceiveEventEmitter.fire({
+            type: "PUSH_PROGRESS",
+            service: payload.service,
+            done: typeof payload.done === "number" ? payload.done : null,
+            total: typeof payload.total === "number" ? payload.total : null,
+            serviceComplete: payload.serviceComplete === true,
+            pushComplete: payload.pushComplete === true,
+          });
+        }
+        return;
+      case "PULL_PROGRESS":
+        if (typeof payload.service === "string") {
+          this.onDidReceiveEventEmitter.fire({
+            type: "PULL_PROGRESS",
+            service: payload.service,
+            done: typeof payload.done === "number" ? payload.done : null,
+            total: typeof payload.total === "number" ? payload.total : null,
+            serviceComplete: payload.serviceComplete === true,
+            pullComplete: payload.pullComplete === true,
           });
         }
         return;

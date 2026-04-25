@@ -65,6 +65,7 @@ export function registerWatchCommand(program: Command): void {
       }
 
       let websocketRuntime: ReturnType<typeof attachWebSocketServer> | null = null;
+      let studioPushAllActive = false;
       const rebuildProjectTree = async () => buildProjectTree(config, ignoreRules);
       const engine = new SyncEngine(await rebuildProjectTree(), {
         rebuildProjectTree,
@@ -103,6 +104,36 @@ export function registerWatchCommand(program: Command): void {
           diagnostics: engine.getDiagnostics(),
         };
         await writeRuntimeState(config, runtimeState);
+      };
+
+      const reportPullProgressFromStudio = async (progress: {
+        service?: string | null;
+        done?: number | null;
+        total?: number | null;
+        serviceComplete?: boolean;
+        pullComplete?: boolean;
+      }): Promise<void> => {
+        if (!progress.service) {
+          return;
+        }
+
+        const done = progress.done ?? null;
+        const total = progress.total ?? null;
+
+        websocketRuntime?.broadcastToRole("editor", {
+          type: "PULL_PROGRESS",
+          service: progress.service,
+          done,
+          total,
+          serviceComplete: progress.serviceComplete === true,
+          pullComplete: progress.pullComplete === true,
+        });
+
+        if (progress.serviceComplete && total) {
+          logger.info(`Pushing to Studio completed for ${progress.service} (${total}/${total}).`);
+        } else if (done !== null && total !== null && done <= 50) {
+          logger.info(`Pushing to Studio started for ${progress.service} (${total} instances).`);
+        }
       };
 
       const httpServer = await startHttpServer({
@@ -158,10 +189,24 @@ export function registerWatchCommand(program: Command): void {
           await engine.handleStudioSync(nodePath, payload);
           await persistRuntimeState();
         },
-        pushBatchFromStudio: async (instances) => {
-          await engine.handleStudioPushBatch(instances);
-          await persistRuntimeState();
+        pushBatchFromStudio: async (instances, progress) => {
+          if (progress?.service) {
+            studioPushAllActive = true;
+          }
+
+          try {
+            await engine.handleStudioPushBatch(instances, progress);
+            await persistRuntimeState();
+          } catch (error) {
+            studioPushAllActive = false;
+            throw error;
+          } finally {
+            if (progress?.pushComplete) {
+              studioPushAllActive = false;
+            }
+          }
         },
+        reportPullProgressFromStudio,
         removeFromStudio: async (nodePath) => {
           await engine.handleStudioRemove(nodePath);
           await persistRuntimeState();
@@ -233,10 +278,24 @@ export function registerWatchCommand(program: Command): void {
             await engine.handleStudioSync(nodePath, payload);
             await persistRuntimeState();
           },
-          pushBatchFromStudio: async (instances) => {
-            await engine.handleStudioPushBatch(instances);
-            await persistRuntimeState();
+          pushBatchFromStudio: async (instances, progress) => {
+            if (progress?.service) {
+              studioPushAllActive = true;
+            }
+
+            try {
+              await engine.handleStudioPushBatch(instances, progress);
+              await persistRuntimeState();
+            } catch (error) {
+              studioPushAllActive = false;
+              throw error;
+            } finally {
+              if (progress?.pushComplete) {
+                studioPushAllActive = false;
+              }
+            }
           },
+          reportPullProgressFromStudio,
           removeFromStudio: async (nodePath) => {
             await engine.handleStudioRemove(nodePath);
             await persistRuntimeState();
@@ -272,6 +331,11 @@ export function registerWatchCommand(program: Command): void {
         if (options.verbose) {
           logger.info(`${eventName} ${relativePath}`);
         }
+
+        if (studioPushAllActive) {
+          return;
+        }
+
         debouncedRefresh.trigger();
       });
 

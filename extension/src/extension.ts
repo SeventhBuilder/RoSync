@@ -149,6 +149,23 @@ function statusBarTextForState(state: ConnectionState): string {
   }
 }
 
+function statusBarTooltipForEndpoint(endpoint: { host: string; port: number } | null): string {
+  return endpoint ? `RoSync daemon: ${endpoint.host}:${endpoint.port}` : "RoSync daemon connection status";
+}
+
+function transferProgressLabel(done: number | null, total: number | null): string {
+  return done !== null && total !== null ? `${done}/${total}` : "working";
+}
+
+function setConnectionStatusBar(
+  statusBarItem: vscode.StatusBarItem,
+  state: ConnectionState,
+  endpoint: { host: string; port: number } | null,
+): void {
+  statusBarItem.text = statusBarTextForState(state);
+  statusBarItem.tooltip = statusBarTooltipForEndpoint(endpoint);
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const log = vscode.window.createOutputChannel("RoSync");
   log.appendLine("RoSync activating...");
@@ -168,8 +185,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const propertiesProvider = new PropertiesProvider(daemonClient);
     const statusProvider = new StatusProvider(daemonClient);
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusBarItem.text = statusBarTextForState("connecting");
-    statusBarItem.tooltip = "RoSync daemon connection status";
+    let lastEndpoint: { host: string; port: number } | null = null;
+    setConnectionStatusBar(statusBarItem, "connecting", lastEndpoint);
     statusBarItem.command = "rosync.refreshExplorer";
     statusBarItem.show();
     const explorerTreeView = vscode.window.createTreeView("rosync.explorer", {
@@ -234,10 +251,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
       daemonClient.onDidReceiveEvent((event) => {
         if (event.type === "CONNECTION_STATE") {
-          statusBarItem.text = statusBarTextForState(event.state);
-          statusBarItem.tooltip = event.endpoint
-            ? `RoSync daemon: ${event.endpoint.host}:${event.endpoint.port}`
-            : "RoSync daemon connection status";
+          lastEndpoint = event.endpoint;
+          setConnectionStatusBar(statusBarItem, event.state, lastEndpoint);
+        } else if (event.type === "PUSH_PROGRESS") {
+          const progressText = transferProgressLabel(event.done, event.total);
+
+          if (event.pushComplete) {
+            setConnectionStatusBar(statusBarItem, daemonClient.connectionState, lastEndpoint);
+            log.appendLine("Pull from Studio complete.");
+          } else {
+            statusBarItem.text = `$(sync~spin) RoSync Pull: ${event.service} ${progressText}`;
+            statusBarItem.tooltip = `Pulling from Studio: ${event.service} ${progressText}`;
+
+            if (event.done !== null && event.total !== null) {
+              if (event.serviceComplete) {
+                log.appendLine(`Pulled ${event.service} from Studio (${event.total}/${event.total}).`);
+              } else if (event.done <= 50) {
+                log.appendLine(`Pulling ${event.service} from Studio (${event.total} instances).`);
+              }
+            }
+          }
+        } else if (event.type === "PULL_PROGRESS") {
+          const progressText = transferProgressLabel(event.done, event.total);
+
+          if (event.pullComplete) {
+            setConnectionStatusBar(statusBarItem, daemonClient.connectionState, lastEndpoint);
+            log.appendLine("Push to Studio complete.");
+          } else {
+            statusBarItem.text = `$(sync~spin) RoSync Push: ${event.service} ${progressText}`;
+            statusBarItem.tooltip = `Pushing to Studio: ${event.service} ${progressText}`;
+
+            if (event.done !== null && event.total !== null) {
+              if (event.serviceComplete) {
+                log.appendLine(`Pushed ${event.service} to Studio (${event.total}/${event.total}).`);
+              } else if (event.done <= 50) {
+                log.appendLine(`Pushing ${event.service} to Studio (${event.total} instances).`);
+              }
+            }
+          }
         } else if (event.type === "CONFLICT") {
           void vscode.window.showWarningMessage(`RoSync conflict detected at ${event.conflict.path}`);
         } else if (event.type === "ERROR") {

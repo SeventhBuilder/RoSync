@@ -422,7 +422,16 @@ local function countTreeInstances(tree)
 end
 
 local function createProgressState(options, total)
-	if type(options) ~= "table" or type(options.onProgress) ~= "function" then
+	if type(options) ~= "table" then
+		return nil
+	end
+
+	local onProgress = type(options.onProgress) == "function" and options.onProgress or nil
+	local onServiceStart = type(options.onServiceStart) == "function" and options.onServiceStart or nil
+	local onServiceProgress = type(options.onServiceProgress) == "function" and options.onServiceProgress or nil
+	local onServiceComplete = type(options.onServiceComplete) == "function" and options.onServiceComplete or nil
+
+	if onProgress == nil and onServiceStart == nil and onServiceProgress == nil and onServiceComplete == nil then
 		return nil
 	end
 
@@ -430,8 +439,50 @@ local function createProgressState(options, total)
 		done = 0,
 		total = total,
 		batchSize = type(options.batchSize) == "number" and math.max(1, options.batchSize) or 50,
-		onProgress = options.onProgress,
+		onProgress = onProgress,
+		onServiceStart = onServiceStart,
+		onServiceProgress = onServiceProgress,
+		onServiceComplete = onServiceComplete,
+		currentService = nil,
+		currentServiceDone = 0,
+		currentServiceTotal = 0,
+		currentServiceIsLast = false,
 	}
+end
+
+local function beginServiceProgress(progressState, serviceName, total, isLastService)
+	if progressState == nil then
+		return
+	end
+
+	progressState.currentService = serviceName
+	progressState.currentServiceDone = 0
+	progressState.currentServiceTotal = total
+	progressState.currentServiceIsLast = isLastService == true
+
+	if progressState.onServiceStart then
+		progressState.onServiceStart(serviceName, total, isLastService == true)
+	end
+end
+
+local function completeServiceProgress(progressState)
+	if progressState == nil or progressState.currentService == nil then
+		return
+	end
+
+	if progressState.onServiceComplete then
+		progressState.onServiceComplete(
+			progressState.currentService,
+			progressState.currentServiceDone,
+			progressState.currentServiceTotal,
+			progressState.currentServiceIsLast == true
+		)
+	end
+
+	progressState.currentService = nil
+	progressState.currentServiceDone = 0
+	progressState.currentServiceTotal = 0
+	progressState.currentServiceIsLast = false
 end
 
 local function markProgress(progressState)
@@ -440,7 +491,18 @@ local function markProgress(progressState)
 	end
 
 	progressState.done += 1
-	if progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total then
+	if progressState.currentService ~= nil then
+		progressState.currentServiceDone += 1
+		if progressState.onServiceProgress then
+			local serviceDone = progressState.currentServiceDone
+			local serviceTotal = progressState.currentServiceTotal
+			if serviceDone % progressState.batchSize == 0 or serviceDone >= serviceTotal then
+				progressState.onServiceProgress(progressState.currentService, serviceDone, serviceTotal)
+			end
+		end
+	end
+
+	if progressState.onProgress and (progressState.done % progressState.batchSize == 0 or progressState.done >= progressState.total) then
 		progressState.onProgress(progressState.done, progressState.total)
 	end
 end
@@ -768,8 +830,10 @@ function Deserializer.applyTree(tree, options)
 	local progressState = createProgressState(options, countTreeInstances(tree))
 	ChangeHistoryService:SetWaypoint("Before RoSync Apply")
 
-	for _, serviceNode in ipairs(tree.services) do
+	for index, serviceNode in ipairs(tree.services) do
+		beginServiceProgress(progressState, serviceNode.name, countNodeInstances(serviceNode), index == #tree.services)
 		local success, result = applyServiceNode(serviceNode, progressState)
+		completeServiceProgress(progressState)
 		if not success then
 			table.insert(errors, tostring(result))
 		end

@@ -60,6 +60,10 @@ function removeNodeByPath(nodes: ProjectTreeNode[], targetPath: string): Project
   return filtered;
 }
 
+function pathIsWithinService(nodePath: string, serviceName: string): boolean {
+  return nodePath === serviceName || nodePath.startsWith(`${serviceName}/`);
+}
+
 export class ExplorerNode extends vscode.TreeItem {
   public constructor(
     public readonly data: ProjectTreeNode,
@@ -89,6 +93,7 @@ export class ExplorerProvider implements vscode.TreeDataProvider<ExplorerNode>, 
   private treeSnapshot: ProjectTreeSnapshot | null = null;
   private loadError: string | null = null;
   private readonly conflictPaths = new Set<string>();
+  private activeStudioPushService: string | null = null;
   private readonly eventSubscription: vscode.Disposable;
 
   public constructor(private readonly daemonClient: DaemonClient) {
@@ -154,12 +159,38 @@ export class ExplorerProvider implements vscode.TreeDataProvider<ExplorerNode>, 
     return node?.data ?? null;
   }
 
+  private async refreshService(serviceName: string): Promise<void> {
+    if (!this.treeSnapshot) {
+      await this.refresh();
+      return;
+    }
+
+    try {
+      const nextNode = await this.daemonClient.node(serviceName);
+      this.treeSnapshot = {
+        ...this.treeSnapshot,
+        services: replaceOrInsertNode(this.treeSnapshot.services, nextNode),
+      };
+      this.onDidChangeTreeDataEmitter.fire(undefined);
+    } catch {
+      await this.refresh();
+    }
+  }
+
   private async handleDaemonEvent(event: DaemonEvent): Promise<void> {
     switch (event.type) {
       case "WELCOME":
         await this.refresh();
         return;
       case "SYNC_INSTANCE": {
+        if (
+          event.origin === "studio" &&
+          this.activeStudioPushService &&
+          pathIsWithinService(event.path, this.activeStudioPushService)
+        ) {
+          return;
+        }
+
         if (!this.treeSnapshot) {
           await this.refresh();
           return;
@@ -200,12 +231,22 @@ export class ExplorerProvider implements vscode.TreeDataProvider<ExplorerNode>, 
         };
         this.onDidChangeTreeDataEmitter.fire(undefined);
         return;
+      case "PUSH_PROGRESS":
+        this.activeStudioPushService = event.pushComplete ? null : event.service;
+        if (event.serviceComplete) {
+          await this.refreshService(event.service);
+          if (event.pushComplete) {
+            this.activeStudioPushService = null;
+          }
+        }
+        return;
       case "CONFLICT":
         this.conflictPaths.add(event.conflict.path);
         this.onDidChangeTreeDataEmitter.fire(undefined);
         return;
       case "CONNECTION_STATE":
         if (event.state === "disconnected") {
+          this.activeStudioPushService = null;
           this.loadError = "Daemon disconnected";
           this.onDidChangeTreeDataEmitter.fire(undefined);
         }
